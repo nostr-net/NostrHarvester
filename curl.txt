@@ -1,0 +1,40 @@
+#### Get Recent Events
+
+
+curl -X GET "https://s.nostr.wtf/api/events?limit=5"
+
+
+#### Get Events from a Specific User
+
+
+curl -X GET "https://s.nostr.wtf/api/events?pubkey=npub1abcdef...&limit=10"
+
+
+#### Search for Events
+
+
+curl -X GET "https://s.nostr.wtf/api/events?q=bitcoin&limit=10"
+
+
+#### Get Events from a Specific Relay
+
+
+curl -X GET "https://s.nostr.wtf/api/events?relay=wss://relay.damus.io&limit=10"
+
+
+#### Get Events by Kind
+
+
+curl -X GET "https://s.nostr.wtf/api/events?kind=1&limit=10"
+
+
+#### Get Events in a Time Range
+
+
+curl -X GET "https://s.nostr.wtf/api/events?since=1677839462&until=1677925862&limit=10"
+
+
+#### Get API Stats
+
+
+curl -X GET "https://s.nostr.wtf/api/stats"

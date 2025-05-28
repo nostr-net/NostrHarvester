@@ -1,0 +1,190 @@
+import os
+import json
+import logging
+import asyncio
+import psycopg2
+from psycopg2.pool import SimpleConnectionPool
+from psycopg2.extras import RealDictCursor
+
+logger = logging.getLogger(__name__)
+
+class Storage:
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.pool = None
+        self.db_config = {
+            'dbname': os.environ['PGDATABASE'],
+            'user': os.environ['PGUSER'],
+            'password': os.environ['PGPASSWORD'],
+            'host': os.environ['PGHOST'],
+            'port': os.environ['PGPORT']
+        }
+        self._max_retries = 3
+        self._retry_delay = 1  # seconds
+
+    async def _init_pool(self):
+        """Initialize the connection pool with retries"""
+        for attempt in range(self._max_retries):
+            try:
+                if not self.pool:
+                    self.pool = SimpleConnectionPool(1, 10, **self.db_config)
+                return True
+            except Exception as e:
+                if attempt == self._max_retries - 1:
+                    logger.error(f"Failed to initialize connection pool after {self._max_retries} attempts: {e}")
+                    raise
+                logger.warning(f"Failed to initialize pool (attempt {attempt + 1}), retrying...")
+                await asyncio.sleep(self._retry_delay)
+        return False
+
+    async def initialize(self):
+        """Initialize the database with required schema"""
+        async with self.lock:
+            logger.info("Initializing PostgreSQL database")
+            try:
+                await self._init_pool()
+
+                # Initialize schema
+                conn = self.pool.getconn()
+                try:
+                    with conn.cursor() as cursor, open('schema.sql', 'r') as f:
+                        cursor.execute(f.read())
+                    conn.commit()
+                    logger.info("Database schema initialized successfully")
+                finally:
+                    self.pool.putconn(conn)
+            except Exception as e:
+                logger.error(f"Error initializing database: {e}")
+                raise
+
+    async def store_event(self, event):
+        """Store a Nostr event"""
+        if not self.pool:
+            await self.initialize()
+
+        async with self.lock:
+            conn = self.pool.getconn()
+            try:
+                with conn.cursor() as cursor:
+                    # Ensure created_at is within valid range for BIGINT
+                    created_at = event.get('created_at', 0)
+                    if not isinstance(created_at, int) or created_at < 0:
+                        logger.warning(f"Invalid created_at value: {created_at}, using 0 instead")
+                        created_at = 0
+
+                    cursor.execute("""
+                        INSERT INTO events (
+                            id, pubkey, created_at, kind, content, sig, raw_data
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                    """, (
+                        event.get('id'),
+                        event.get('pubkey'),
+                        created_at,
+                        event.get('kind'),
+                        event.get('content'),
+                        event.get('sig'),
+                        json.dumps(event)
+                    ))
+                    if cursor.rowcount > 0:
+                        logger.debug(f"Stored new event {event.get('id')}")
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Error storing event {event.get('id')}: {e}")
+                conn.rollback()
+                raise
+            finally:
+                self.pool.putconn(conn)
+
+    async def store_event_source(self, event_id, relay_url, response_time_ms=None):
+        """Store the relay source for an event with timing information"""
+        if not self.pool:
+            await self.initialize()
+
+        async with self.lock:
+            conn = self.pool.getconn()
+            try:
+                with conn.cursor() as cursor:
+                    # Store timestamp in seconds
+                    current_time = int(asyncio.get_event_loop().time())
+
+                    # Ensure response_time_ms is within valid integer range
+                    if response_time_ms and response_time_ms > 2147483647:  # max 32-bit integer
+                        logger.warning(f"Response time {response_time_ms}ms exceeds maximum value, capping at 2147483647")
+                        response_time_ms = 2147483647
+
+                    # Handle negative response times (clock skew or future events)
+                    if response_time_ms and response_time_ms < 0:
+                        logger.warning(f"Negative response time {response_time_ms}ms, setting to 0")
+                        response_time_ms = 0
+
+                    cursor.execute("""
+                        INSERT INTO event_sources (
+                            event_id, relay_url, first_seen_at, response_time_ms
+                        ) VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (event_id, relay_url) DO NOTHING
+                    """, (
+                        event_id,
+                        relay_url,
+                        current_time,
+                        response_time_ms
+                    ))
+                    if cursor.rowcount > 0:
+                        logger.debug(f"Added source {relay_url} for event {event_id}")
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Error storing event source for {event_id}: {e}")
+                conn.rollback()
+            finally:
+                self.pool.putconn(conn)
+
+    def query_events(self, filters=None):
+        """Query events with optional filters"""
+        if not self.pool:
+            raise RuntimeError("Database not initialized")
+
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                query = "SELECT raw_data FROM events"
+                params = []
+
+                if filters:
+                    where_clauses = []
+                    if 'kinds' in filters:
+                        where_clauses.append("kind = ANY(%s)")
+                        params.append(filters['kinds'])
+                    if 'since' in filters:
+                        where_clauses.append("created_at >= %s")
+                        params.append(filters['since'])
+                    if 'until' in filters:
+                        where_clauses.append("created_at <= %s")
+                        params.append(filters['until'])
+                    if where_clauses:
+                        query += " WHERE " + " AND ".join(where_clauses)
+
+                cursor.execute(query, params)
+                return [json.loads(row['raw_data']) for row in cursor.fetchall()]
+        finally:
+            self.pool.putconn(conn)
+
+    def get_event_sources(self, event_id):
+        """Get all relays where an event was found"""
+        if not self.pool:
+            raise RuntimeError("Database not initialized")
+
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT relay_url FROM event_sources 
+                    WHERE event_id = %s
+                """, (event_id,))
+                return [row[0] for row in cursor.fetchall()]
+        finally:
+            self.pool.putconn(conn)
+
+    def __del__(self):
+        """Cleanup connection pool on deletion"""
+        if self.pool:
+            self.pool.closeall()
