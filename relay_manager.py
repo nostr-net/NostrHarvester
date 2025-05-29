@@ -58,7 +58,7 @@ class RelayManager:
         """Process incoming messages from relays"""
         try:
             data = json.loads(message)
-            if len(data) >= 2:
+            if len(data) >= 3:
                 if data[0] == "EVENT":
                     # Extract the event data and calculate response time in milliseconds
                     event = data[2]
@@ -66,7 +66,9 @@ class RelayManager:
                     # Validate event timestamp
                     event_time = event.get('created_at', 0)
                     if not isinstance(event_time, int) or event_time < 0:
-                        logger.warning(f"Invalid event timestamp from {relay_url}: {event_time}, using 0")
+                        logger.warning(
+                            f"Invalid event timestamp from {relay_url}: {event_time}, using 0"
+                        )
                         event_time = 0
 
                     current_time = int(asyncio.get_event_loop().time())
@@ -78,14 +80,20 @@ class RelayManager:
 
                     # Safeguard against extreme values - add logging for diagnosis
                     if response_time > 86400:  # More than 24 hours
-                        logger.warning(f"Unusually high response time ({response_time}s) for event {event.get('id')} from {relay_url}. Event time: {event_time}, Current time: {current_time}")
+                        logger.warning(
+                            f"Unusually high response time ({response_time}s) for event {event.get('id')} from {relay_url}. Event time: {event_time}, Current time: {current_time}"
+                        )
 
                     logger.debug(f"Received event {event.get('id')} from {relay_url}")
-                    await self.event_processor.process_event(event, relay_url, int(response_time_ms))
+                    await self.event_processor.process_event(
+                        event, relay_url, int(response_time_ms)
+                    )
                 elif data[0] == "EOSE":
                     logger.info(f"End of stored events from {relay_url}")
                 else:
                     logger.debug(f"Received message type {data[0]} from {relay_url}")
+            else:
+                logger.error(f"Unexpected message format from {relay_url}: {data}")
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON from {relay_url}: {message}")
         except Exception as e:
