@@ -120,8 +120,8 @@ def get_events():
             params.append(kind)
 
         if search_text:
-            where_clauses.append("e.content ILIKE %s")
-            params.append(f"%{search_text}%")
+            where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")
+            params.append(search_text)
 
         if since_ts:
             where_clauses.append("e.created_at >= %s")
