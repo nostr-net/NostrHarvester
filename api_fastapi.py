@@ -5,7 +5,6 @@ import logging
 from typing import Optional, List, Dict, Any
 import json
 import atexit
-import asyncio
 from utils import normalize_pubkey, parse_time_filter
 from storage import Storage
 from fastapi.responses import JSONResponse
@@ -16,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 # Storage instance
 storage = Storage()
-asyncio.run(storage.initialize())
+
+@app.on_event("startup")
+async def startup():
+    await storage.initialize()
 
 @app.get("/api/events", response_model=Dict[str, Any])
 async def get_events(
@@ -224,6 +226,7 @@ async def health_check():
             detail=f"Database connection error: {str(e)}"
         )
 
+@app.on_event("shutdown")
 def cleanup():
     """Cleanup database connections"""
     if storage.pool is not None:
