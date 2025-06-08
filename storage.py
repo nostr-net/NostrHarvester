@@ -164,6 +164,23 @@ class Storage:
                 base_query = "SELECT DISTINCT e.* FROM events e"
                 join_clause = ""
                 params = []
+                if filters:
+                    where_clauses = []
+                    if 'kinds' in filters:
+                        where_clauses.append("kind = ANY(%s)")
+                        params.append(filters['kinds'])
+                    if 'tags' in filters:
+                        for tag_pair in filters['tags']:
+                            where_clauses.append("(raw_data->'tags') @> %s::jsonb")
+                            params.append(json.dumps([tag_pair]))
+                    if 'since' in filters:
+                        where_clauses.append("created_at >= %s")
+                        params.append(filters['since'])
+                    if 'until' in filters:
+                        where_clauses.append("created_at <= %s")
+                        params.append(filters['until'])
+                    if where_clauses:
+                        query += " WHERE " + " AND ".join(where_clauses)
                 where_clauses = []
 
                 if relay:
