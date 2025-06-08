@@ -53,9 +53,28 @@ class NostrIndexer:
         await self.event_processor.stop()
         await self.relay_manager.disconnect_all()
 
-    def query_events(self, filters=None):
+    def query_events(
+        self,
+        pubkey=None,
+        relay=None,
+        q=None,
+        kind=None,
+        since=None,
+        until=None,
+        limit=100,
+        offset=0,
+    ):
         """Query stored events with optional filters"""
-        return self.storage.query_events(filters)
+        return self.storage.query_events(
+            pubkey=pubkey,
+            relay=relay,
+            q=q,
+            kind=kind,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
 
     def get_event_sources(self, event_id):
         """Get relays where an event was found"""
