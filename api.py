@@ -1,12 +1,15 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Query, Depends, HTTPException
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 import os
 import logging
+from typing import Optional, List, Dict, Any
+import atexit
 from utils import normalize_pubkey, pubkey_to_bech32, parse_time_filter
+from fastapi.responses import JSONResponse
 
-app = Flask(__name__)
+app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -61,38 +64,41 @@ def init_db():
 # Initialize database at startup
 init_db()
 
-@app.route('/api/events', methods=['GET'])
-def get_events():
-    """Get events with optional filters."""
+@app.get("/api/events", response_model=Dict[str, Any])
+async def get_events(
+    pubkey: Optional[str] = None, 
+    relay: Optional[str] = None,
+    q: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    kind: Optional[int] = None,
+    limit: Optional[int] = Query(100, ge=1, le=1000),
+    offset: Optional[int] = Query(0, ge=0)
+):
+    """
+    Get events with optional filters.
+    
+    - **pubkey**: Filter events by public key (hex or npub format)
+    - **relay**: Filter events by the relay they were received from
+    - **q**: Search for text within event content
+    - **since**: Return events created after this time (timestamp or ISO format)
+    - **until**: Return events created before this time (timestamp or ISO format)
+    - **kind**: Filter events by kind
+    - **limit**: Maximum number of events to return (default: 100, max: 1000)
+    - **offset**: Pagination offset (default: 0)
+    """
     conn = None
     try:
-        # Extract and validate parameters
-        raw_pubkey = request.args.get('pubkey')
-        relay = request.args.get('relay')
-        search_text = request.args.get('q')
-        since = request.args.get('since')
-        until = request.args.get('until')
-        kind = request.args.get('kind')
-        limit = min(int(request.args.get('limit', 100)), 1000)
-        offset = max(0, int(request.args.get('offset', 0)))
-
         # Normalize pubkey if provided
-        pubkey = normalize_pubkey(raw_pubkey) if raw_pubkey else None
-        if raw_pubkey and not pubkey:
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid pubkey format. Use either hex or npub format.'
-            }), 400
-
-        # Validate kind parameter
-        if kind:
-            try:
-                kind = int(kind)
-            except ValueError:
-                return jsonify({
+        normalized_pubkey = normalize_pubkey(pubkey) if pubkey else None
+        if pubkey and not normalized_pubkey:
+            return JSONResponse(
+                status_code=400,
+                content={
                     'status': 'error',
-                    'message': 'Invalid kind parameter. Must be an integer.'
-                }), 400
+                    'message': 'Invalid pubkey format. Use either hex or npub format.'
+                }
+            )
 
         # Parse time filters
         since_ts = parse_time_filter(since) if since else None
@@ -111,17 +117,17 @@ def get_events():
             where_clauses.append("es.relay_url = %s")
             params.append(relay_url)
 
-        if pubkey:
+        if normalized_pubkey:
             where_clauses.append("e.pubkey = %s")
-            params.append(pubkey)
+            params.append(normalized_pubkey)
 
         if kind is not None:
             where_clauses.append("e.kind = %s")
             params.append(kind)
 
-        if search_text:
+        if q:
             where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")
-            params.append(search_text)
+            params.append(q)
 
         if since_ts:
             where_clauses.append("e.created_at >= %s")
@@ -157,28 +163,30 @@ def get_events():
             cursor.execute(count_query, params)
             total_count = cursor.fetchone()['count']
 
-            return jsonify({
+            return {
                 'status': 'success',
                 'count': len(events),
                 'total': total_count,
                 'offset': offset,
                 'limit': limit,
                 'events': events
-            })
+            }
 
     except Exception as e:
         logger.error(f"Error processing request: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing request: {str(e)}"
+        )
     finally:
         if conn:
             put_db_connection(conn)
 
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """Get statistics about indexed events and relays."""
+@app.get("/api/stats", response_model=Dict[str, Any])
+async def get_stats():
+    """
+    Get statistics about indexed events and relays.
+    """
     conn = None
     try:
         conn = get_db_connection()
@@ -200,41 +208,43 @@ def get_stats():
             """)
             relay_stats = cursor.fetchall()
 
-            return jsonify({
+            return {
                 'status': 'success',
                 'stats': {
                     'total_events': total_events,
                     'unique_pubkeys': unique_pubkeys,
                     'relays': relay_stats
                 }
-            })
+            }
 
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting stats: {str(e)}"
+        )
     finally:
         if conn:
             put_db_connection(conn)
 
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Basic health check endpoint"""
+@app.get("/api/health", response_model=Dict[str, Any])
+async def health_check():
+    """
+    Basic health check endpoint
+    """
     try:
         # Test database connection
         conn = get_db_connection()
         put_db_connection(conn)
-        return jsonify({
+        return {
             'status': 'success',
             'message': 'API server is running and database is accessible'
-        })
+        }
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'Database connection error: {str(e)}'
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database connection error: {str(e)}"
+        )
 
 def cleanup():
     """Cleanup database connections"""
@@ -244,9 +254,8 @@ def cleanup():
         pool = None
 
 # Add cleanup on exit
-import atexit
 atexit.register(cleanup)
 
 if __name__ == '__main__':
-    logger.info("Starting API server...")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    import uvicorn
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
