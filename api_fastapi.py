@@ -5,7 +5,6 @@ import logging
 from typing import Optional, List, Dict, Any
 import json
 import atexit
-import asyncio
 from utils import normalize_pubkey, parse_time_filter
 from storage import Storage
 from fastapi.responses import JSONResponse
@@ -16,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 # Storage instance
 storage = Storage()
-asyncio.run(storage.initialize())
+
+@app.on_event("startup")
+async def startup():
+    await storage.initialize()
 
 @app.get("/api/events", response_model=Dict[str, Any])
 async def get_events(
@@ -43,6 +45,7 @@ async def get_events(
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
+    conn = None
     try:
         # Normalize pubkey if provided
         normalized_pubkey = normalize_pubkey(pubkey) if pubkey else None
@@ -125,7 +128,7 @@ async def get_events(
         params.extend([limit, offset])
 
         # Execute query
-        conn = get_db_connection()
+        conn = storage.pool.getconn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
             cursor.execute(query, params)
             events = cursor.fetchall()
@@ -159,6 +162,9 @@ async def get_events(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
         )
+    finally:
+        if conn:
+            storage.pool.putconn(conn)
 
 @app.get("/api/stats", response_model=Dict[str, Any])
 async def get_stats():
@@ -224,6 +230,7 @@ async def health_check():
             detail=f"Database connection error: {str(e)}"
         )
 
+@app.on_event("shutdown")
 def cleanup():
     """Cleanup database connections"""
     if storage.pool is not None:
