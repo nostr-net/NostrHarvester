@@ -28,6 +28,14 @@ services:
       PGPASSWORD: nostr
       PGHOST: db
       PGPORT: 5432
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - app
   db:
     image: postgres:15
     environment:

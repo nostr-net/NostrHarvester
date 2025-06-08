@@ -7,8 +7,17 @@ import atexit
 from common.utils import normalize_pubkey, parse_time_filter
 from common.storage import Storage
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 

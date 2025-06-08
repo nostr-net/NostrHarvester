@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nostr Search</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }
+    input[type="text"] { width: 400px; padding: 10px; font-size: 16px; }
+    button { padding: 10px 20px; font-size: 16px; }
+    #results { width: 80%; max-width: 800px; margin: 20px auto; text-align: left; }
+    pre { white-space: pre-wrap; word-wrap: break-word; background: #f8f8f8; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Nostr Search</h1>
+  <input id="searchInput" type="text" placeholder="Enter search query...">
+  <button id="searchButton">Search</button>
+  <div id="results"></div>
+  <script src="app.js"></script>
+</body>
+</html>
