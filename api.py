@@ -4,6 +4,7 @@ import psycopg2.extras
 import psycopg2.pool
 import os
 import logging
+import json
 from utils import normalize_pubkey, pubkey_to_bech32, parse_time_filter
 
 app = Flask(__name__)
@@ -63,7 +64,11 @@ init_db()
 
 @app.route('/api/events', methods=['GET'])
 def get_events():
-    """Get events with optional filters."""
+    """Get events with optional filters.
+
+    Query parameters:
+    - **tag**: Filter events containing tag key:value pairs. Can be repeated.
+    """
     conn = None
     try:
         # Extract and validate parameters
@@ -73,6 +78,7 @@ def get_events():
         since = request.args.get('since')
         until = request.args.get('until')
         kind = request.args.get('kind')
+        tags = request.args.getlist('tag')
         limit = min(int(request.args.get('limit', 100)), 1000)
         offset = max(0, int(request.args.get('offset', 0)))
 
@@ -98,6 +104,17 @@ def get_events():
         since_ts = parse_time_filter(since) if since else None
         until_ts = parse_time_filter(until) if until else None
 
+        # Parse tag filters key:value
+        tag_pairs = []
+        for tag in tags:
+            if ':' not in tag:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Tag filters must be in key:value format'
+                }), 400
+            k, v = tag.split(':', 1)
+            tag_pairs.append([k, v])
+
         # Build query
         query = """
             SELECT DISTINCT e.* FROM events e
@@ -118,6 +135,10 @@ def get_events():
         if kind is not None:
             where_clauses.append("e.kind = %s")
             params.append(kind)
+
+        for k, v in tag_pairs:
+            where_clauses.append("(e.raw_data->'tags') @> %s::jsonb")
+            params.append(json.dumps([[k, v]]))
 
         if search_text:
             where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")

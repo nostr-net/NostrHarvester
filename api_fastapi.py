@@ -5,6 +5,7 @@ import psycopg2.pool
 import os
 import logging
 from typing import Optional, List, Dict, Any
+import json
 import atexit
 from utils import normalize_pubkey, pubkey_to_bech32, parse_time_filter
 from fastapi.responses import JSONResponse
@@ -72,6 +73,7 @@ async def get_events(
     since: Optional[str] = None,
     until: Optional[str] = None,
     kind: Optional[int] = None,
+    tags: Optional[List[str]] = Query(None, alias='tag'),
     limit: Optional[int] = Query(100, ge=1, le=1000),
     offset: Optional[int] = Query(0, ge=0)
 ):
@@ -84,6 +86,7 @@ async def get_events(
     - **since**: Return events created after this time (timestamp or ISO format)
     - **until**: Return events created before this time (timestamp or ISO format)
     - **kind**: Filter events by kind
+    - **tag**: Filter events containing tag key:value pairs. Can be repeated.
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
@@ -103,6 +106,18 @@ async def get_events(
         # Parse time filters
         since_ts = parse_time_filter(since) if since else None
         until_ts = parse_time_filter(until) if until else None
+
+        # Parse tag filters in the format key:value
+        tag_pairs = []
+        if tags:
+            for tag in tags:
+                if ':' not in tag:
+                    return JSONResponse(
+                        status_code=400,
+                        content={'status': 'error', 'message': 'Tag filters must be in key:value format'}
+                    )
+                k, v = tag.split(':', 1)
+                tag_pairs.append([k, v])
 
         # Build query
         query = """
@@ -124,6 +139,10 @@ async def get_events(
         if kind is not None:
             where_clauses.append("e.kind = %s")
             params.append(kind)
+
+        for k, v in tag_pairs:
+            where_clauses.append("(e.raw_data->'tags') @> %s::jsonb")
+            params.append(json.dumps([[k, v]]))
 
         if q:
             where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")

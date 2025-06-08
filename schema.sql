@@ -26,3 +26,5 @@ CREATE INDEX IF NOT EXISTS idx_event_sources_first_seen ON event_sources(first_s
 
 -- Add GiST index for faster text search
 CREATE INDEX IF NOT EXISTS idx_events_content_gin ON events USING gin(to_tsvector('english', content));
+-- Index JSONB tags for efficient tag lookups
+CREATE INDEX IF NOT EXISTS idx_events_tags_gin ON events USING gin((raw_data->'tags'));

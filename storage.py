@@ -154,6 +154,10 @@ class Storage:
                     if 'kinds' in filters:
                         where_clauses.append("kind = ANY(%s)")
                         params.append(filters['kinds'])
+                    if 'tags' in filters:
+                        for tag_pair in filters['tags']:
+                            where_clauses.append("(raw_data->'tags') @> %s::jsonb")
+                            params.append(json.dumps([tag_pair]))
                     if 'since' in filters:
                         where_clauses.append("created_at >= %s")
                         params.append(filters['since'])
