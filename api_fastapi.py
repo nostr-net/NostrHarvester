@@ -43,6 +43,7 @@ async def get_events(
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
+    conn = None
     try:
         # Normalize pubkey if provided
         normalized_pubkey = normalize_pubkey(pubkey) if pubkey else None
@@ -125,7 +126,7 @@ async def get_events(
         params.extend([limit, offset])
 
         # Execute query
-        conn = get_db_connection()
+        conn = storage.pool.getconn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
             cursor.execute(query, params)
             events = cursor.fetchall()
@@ -159,6 +160,9 @@ async def get_events(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
         )
+    finally:
+        if conn:
+            storage.pool.putconn(conn)
 
 @app.get("/api/stats", response_model=Dict[str, Any])
 async def get_stats():
