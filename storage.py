@@ -5,6 +5,7 @@ import asyncio
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from psycopg2.extras import RealDictCursor
+from utils import pubkey_to_bech32
 
 logger = logging.getLogger(__name__)
 
@@ -138,33 +139,87 @@ class Storage:
             finally:
                 self.pool.putconn(conn)
 
-    def query_events(self, filters=None):
-        """Query events with optional filters"""
+    def query_events(
+        self,
+        pubkey=None,
+        relay=None,
+        q=None,
+        kind=None,
+        since=None,
+        until=None,
+        limit=100,
+        offset=0,
+    ):
+        """Query events with optional filters.
+
+        Parameters mirror the API query parameters.
+        Returns a tuple of (events, total_count).
+        """
         if not self.pool:
             raise RuntimeError("Database not initialized")
 
         conn = self.pool.getconn()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                query = "SELECT raw_data FROM events"
+                base_query = "SELECT DISTINCT e.* FROM events e"
+                join_clause = ""
                 params = []
+                where_clauses = []
 
-                if filters:
-                    where_clauses = []
-                    if 'kinds' in filters:
-                        where_clauses.append("kind = ANY(%s)")
-                        params.append(filters['kinds'])
-                    if 'since' in filters:
-                        where_clauses.append("created_at >= %s")
-                        params.append(filters['since'])
-                    if 'until' in filters:
-                        where_clauses.append("created_at <= %s")
-                        params.append(filters['until'])
-                    if where_clauses:
-                        query += " WHERE " + " AND ".join(where_clauses)
+                if relay:
+                    join_clause = " LEFT JOIN event_sources es ON e.id = es.event_id"
+                    relay_url = relay if relay.startswith("wss://") else f"wss://{relay}"
+                    where_clauses.append("es.relay_url = %s")
+                    params.append(relay_url)
+
+                if pubkey:
+                    where_clauses.append("e.pubkey = %s")
+                    params.append(pubkey)
+
+                if kind is not None:
+                    where_clauses.append("e.kind = %s")
+                    params.append(kind)
+
+                if q:
+                    where_clauses.append(
+                        "to_tsvector('english', e.content) @@ plainto_tsquery('english', %s)"
+                    )
+                    params.append(q)
+
+                if since is not None:
+                    where_clauses.append("e.created_at >= %s")
+                    params.append(since)
+                if until is not None:
+                    where_clauses.append("e.created_at <= %s")
+                    params.append(until)
+
+                query = base_query + join_clause
+                if where_clauses:
+                    query += " WHERE " + " AND ".join(where_clauses)
+
+                order_pagination = " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
+                query += order_pagination
+                params.extend([limit, offset])
 
                 cursor.execute(query, params)
-                return [json.loads(row['raw_data']) for row in cursor.fetchall()]
+                events = cursor.fetchall()
+
+                # Fetch relay sources and bech32 pubkey for each event
+                for event in events:
+                    cursor.execute(
+                        "SELECT relay_url FROM event_sources WHERE event_id = %s",
+                        (event["id"],),
+                    )
+                    event["relays"] = [r[0] for r in cursor.fetchall()]
+                    event["npub"] = pubkey_to_bech32(event["pubkey"])
+
+                count_query = f"SELECT COUNT(DISTINCT e.id) FROM events e{join_clause}"
+                if where_clauses:
+                    count_query += " WHERE " + " AND ".join(where_clauses)
+                cursor.execute(count_query, params[:-2])
+                total_count = cursor.fetchone()["count"]
+
+                return events, total_count
         finally:
             self.pool.putconn(conn)
 

@@ -1,68 +1,21 @@
 from fastapi import FastAPI, Query, Depends, HTTPException
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
-import os
 import logging
 from typing import Optional, List, Dict, Any
 import atexit
-from utils import normalize_pubkey, pubkey_to_bech32, parse_time_filter
+import asyncio
+from utils import normalize_pubkey, parse_time_filter
+from storage import Storage
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create a connection pool
-pool = None
-
-def get_db_config():
-    """Get database configuration from environment variables"""
-    return {
-        'dbname': os.environ['PGDATABASE'],
-        'user': os.environ['PGUSER'],
-        'password': os.environ['PGPASSWORD'],
-        'host': os.environ['PGHOST'],
-        'port': os.environ['PGPORT']
-    }
-
-def get_db_connection():
-    """Get a database connection from the pool"""
-    global pool
-    if pool is None:
-        pool = psycopg2.pool.SimpleConnectionPool(1, 20, **get_db_config())
-    return pool.getconn()
-
-def put_db_connection(conn):
-    """Return a connection to the pool"""
-    global pool
-    if pool is not None:
-        pool.putconn(conn)
-
-def init_db():
-    """Initialize database connection and verify schema"""
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            # Verify tables exist
-            cursor.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'events'
-                );
-            """)
-            if not cursor.fetchone()[0]:
-                logger.error("Database schema not initialized")
-                raise RuntimeError("Database schema not initialized")
-
-        logger.info("Successfully connected to database")
-        put_db_connection(conn)
-    except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-        raise
-
-# Initialize database at startup
-init_db()
+# Storage instance
+storage = Storage()
+asyncio.run(storage.initialize())
 
 @app.get("/api/events", response_model=Dict[str, Any])
 async def get_events(
@@ -87,7 +40,6 @@ async def get_events(
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
-    conn = None
     try:
         # Normalize pubkey if provided
         normalized_pubkey = normalize_pubkey(pubkey) if pubkey else None
@@ -104,73 +56,25 @@ async def get_events(
         since_ts = parse_time_filter(since) if since else None
         until_ts = parse_time_filter(until) if until else None
 
-        # Build query
-        query = """
-            SELECT DISTINCT e.* FROM events e
-        """
-        params = []
-        where_clauses = []
+        events, total_count = storage.query_events(
+            pubkey=normalized_pubkey,
+            relay=relay,
+            q=q,
+            kind=kind,
+            since=since_ts,
+            until=until_ts,
+            limit=limit,
+            offset=offset,
+        )
 
-        if relay:
-            query += " LEFT JOIN event_sources es ON e.id = es.event_id"
-            relay_url = relay if relay.startswith('wss://') else f'wss://{relay}'
-            where_clauses.append("es.relay_url = %s")
-            params.append(relay_url)
-
-        if normalized_pubkey:
-            where_clauses.append("e.pubkey = %s")
-            params.append(normalized_pubkey)
-
-        if kind is not None:
-            where_clauses.append("e.kind = %s")
-            params.append(kind)
-
-        if q:
-            where_clauses.append("e.content ILIKE %s")
-            params.append(f"%{q}%")
-
-        if since_ts:
-            where_clauses.append("e.created_at >= %s")
-            params.append(since_ts)
-        if until_ts:
-            where_clauses.append("e.created_at <= %s")
-            params.append(until_ts)
-
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
-
-        # Add ordering and pagination
-        query += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        # Execute query
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute(query, params)
-            events = cursor.fetchall()
-
-            # Add relay sources and npub for each event
-            for event in events:
-                cursor.execute(
-                    "SELECT relay_url FROM event_sources WHERE event_id = %s", 
-                    (event['id'],)
-                )
-                event['relays'] = [r['relay_url'] for r in cursor.fetchall()]
-                event['npub'] = pubkey_to_bech32(event['pubkey'])
-
-            # Get total count for pagination
-            count_query = f"SELECT COUNT(DISTINCT e.id) FROM ({query}) as e"
-            cursor.execute(count_query, params)
-            total_count = cursor.fetchone()['count']
-
-            return {
-                'status': 'success',
-                'count': len(events),
-                'total': total_count,
-                'offset': offset,
-                'limit': limit,
-                'events': events
-            }
+        return {
+            'status': 'success',
+            'count': len(events),
+            'total': total_count,
+            'offset': offset,
+            'limit': limit,
+            'events': events
+        }
 
     except Exception as e:
         logger.error(f"Error processing request: {e}")
@@ -178,9 +82,6 @@ async def get_events(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
         )
-    finally:
-        if conn:
-            put_db_connection(conn)
 
 @app.get("/api/stats", response_model=Dict[str, Any])
 async def get_stats():
@@ -189,7 +90,7 @@ async def get_stats():
     """
     conn = None
     try:
-        conn = get_db_connection()
+        conn = storage.pool.getconn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
             # Get total events
             cursor.execute("SELECT COUNT(*) as count FROM events")
@@ -225,7 +126,7 @@ async def get_stats():
         )
     finally:
         if conn:
-            put_db_connection(conn)
+            storage.pool.putconn(conn)
 
 @app.get("/api/health", response_model=Dict[str, Any])
 async def health_check():
@@ -234,8 +135,8 @@ async def health_check():
     """
     try:
         # Test database connection
-        conn = get_db_connection()
-        put_db_connection(conn)
+        conn = storage.pool.getconn()
+        storage.pool.putconn(conn)
         return {
             'status': 'success',
             'message': 'API server is running and database is accessible'
@@ -248,10 +149,8 @@ async def health_check():
 
 def cleanup():
     """Cleanup database connections"""
-    global pool
-    if pool is not None:
-        pool.closeall()
-        pool = None
+    if storage.pool is not None:
+        storage.pool.closeall()
 
 # Add cleanup on exit
 atexit.register(cleanup)

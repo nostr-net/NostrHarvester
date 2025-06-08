@@ -1,70 +1,21 @@
 from flask import Flask, request, jsonify
-import psycopg2
-import psycopg2.extras
-import psycopg2.pool
-import os
+import asyncio
 import logging
-from utils import normalize_pubkey, pubkey_to_bech32, parse_time_filter
+from utils import normalize_pubkey, parse_time_filter
+from storage import Storage
+import psycopg2
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create a connection pool
-pool = None
-
-def get_db_config():
-    """Get database configuration from environment variables"""
-    return {
-        'dbname': os.environ['PGDATABASE'],
-        'user': os.environ['PGUSER'],
-        'password': os.environ['PGPASSWORD'],
-        'host': os.environ['PGHOST'],
-        'port': os.environ['PGPORT']
-    }
-
-def get_db_connection():
-    """Get a database connection from the pool"""
-    global pool
-    if pool is None:
-        pool = psycopg2.pool.SimpleConnectionPool(1, 20, **get_db_config())
-    return pool.getconn()
-
-def put_db_connection(conn):
-    """Return a connection to the pool"""
-    global pool
-    if pool is not None:
-        pool.putconn(conn)
-
-def init_db():
-    """Initialize database connection and verify schema"""
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            # Verify tables exist
-            cursor.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'events'
-                );
-            """)
-            if not cursor.fetchone()[0]:
-                logger.error("Database schema not initialized")
-                raise RuntimeError("Database schema not initialized")
-
-        logger.info("Successfully connected to database")
-        put_db_connection(conn)
-    except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-        raise
-
-# Initialize database at startup
-init_db()
+# Storage instance
+storage = Storage()
+asyncio.run(storage.initialize())
 
 @app.route('/api/events', methods=['GET'])
 def get_events():
     """Get events with optional filters."""
-    conn = None
     try:
         # Extract and validate parameters
         raw_pubkey = request.args.get('pubkey')
@@ -98,73 +49,25 @@ def get_events():
         since_ts = parse_time_filter(since) if since else None
         until_ts = parse_time_filter(until) if until else None
 
-        # Build query
-        query = """
-            SELECT DISTINCT e.* FROM events e
-        """
-        params = []
-        where_clauses = []
+        events, total_count = storage.query_events(
+            pubkey=pubkey,
+            relay=relay,
+            q=search_text,
+            kind=kind,
+            since=since_ts,
+            until=until_ts,
+            limit=limit,
+            offset=offset,
+        )
 
-        if relay:
-            query += " LEFT JOIN event_sources es ON e.id = es.event_id"
-            relay_url = relay if relay.startswith('wss://') else f'wss://{relay}'
-            where_clauses.append("es.relay_url = %s")
-            params.append(relay_url)
-
-        if pubkey:
-            where_clauses.append("e.pubkey = %s")
-            params.append(pubkey)
-
-        if kind is not None:
-            where_clauses.append("e.kind = %s")
-            params.append(kind)
-
-        if search_text:
-            where_clauses.append("e.content ILIKE %s")
-            params.append(f"%{search_text}%")
-
-        if since_ts:
-            where_clauses.append("e.created_at >= %s")
-            params.append(since_ts)
-        if until_ts:
-            where_clauses.append("e.created_at <= %s")
-            params.append(until_ts)
-
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
-
-        # Add ordering and pagination
-        query += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        # Execute query
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute(query, params)
-            events = cursor.fetchall()
-
-            # Add relay sources and npub for each event
-            for event in events:
-                cursor.execute(
-                    "SELECT relay_url FROM event_sources WHERE event_id = %s", 
-                    (event['id'],)
-                )
-                event['relays'] = [r['relay_url'] for r in cursor.fetchall()]
-                event['npub'] = pubkey_to_bech32(event['pubkey'])
-
-            # Get total count for pagination
-            count_query = f"SELECT COUNT(DISTINCT e.id) FROM ({query}) as e"
-            cursor.execute(count_query, params)
-            total_count = cursor.fetchone()['count']
-
-            return jsonify({
-                'status': 'success',
-                'count': len(events),
-                'total': total_count,
-                'offset': offset,
-                'limit': limit,
-                'events': events
-            })
+        return jsonify({
+            'status': 'success',
+            'count': len(events),
+            'total': total_count,
+            'offset': offset,
+            'limit': limit,
+            'events': events
+        })
 
     except Exception as e:
         logger.error(f"Error processing request: {e}")
@@ -172,16 +75,13 @@ def get_events():
             'status': 'error',
             'message': str(e)
         }), 500
-    finally:
-        if conn:
-            put_db_connection(conn)
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     """Get statistics about indexed events and relays."""
     conn = None
     try:
-        conn = get_db_connection()
+        conn = storage.pool.getconn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
             # Get total events
             cursor.execute("SELECT COUNT(*) as count FROM events")
@@ -217,15 +117,15 @@ def get_stats():
         }), 500
     finally:
         if conn:
-            put_db_connection(conn)
+            storage.pool.putconn(conn)
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Basic health check endpoint"""
     try:
         # Test database connection
-        conn = get_db_connection()
-        put_db_connection(conn)
+        conn = storage.pool.getconn()
+        storage.pool.putconn(conn)
         return jsonify({
             'status': 'success',
             'message': 'API server is running and database is accessible'
@@ -238,10 +138,8 @@ def health_check():
 
 def cleanup():
     """Cleanup database connections"""
-    global pool
-    if pool is not None:
-        pool.closeall()
-        pool = None
+    if storage.pool is not None:
+        storage.pool.closeall()
 
 # Add cleanup on exit
 import atexit
