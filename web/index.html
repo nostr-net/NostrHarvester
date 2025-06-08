@@ -5,17 +5,123 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nostr Search</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; }
-    input[type="text"] { width: 400px; padding: 10px; font-size: 16px; }
-    button { padding: 10px 20px; font-size: 16px; }
-    #results { width: 80%; max-width: 800px; margin: 20px auto; text-align: left; }
-    pre { white-space: pre-wrap; word-wrap: break-word; background: #f8f8f8; padding: 10px; }
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 30px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .search-container {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      justify-content: center;
+    }
+    input[type="text"] { 
+      width: 100%; 
+      max-width: 600px;
+      padding: 10px;
+      font-size: 16px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+    }
+    button { 
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+    #filters { 
+      width: 100%;
+      max-width: 800px;
+      margin: 20px auto;
+      text-align: center;
+      font-size: 14px;
+      line-height: 1.6;
+      background: #f8f8f8;
+      padding: 15px;
+      border-radius: 4px;
+    }
+    #examples { 
+      width: 100%;
+      max-width: 800px;
+      margin: 20px auto;
+      text-align: center;
+      font-size: 14px;
+    }
+    #examples .example { 
+      color: #007bff;
+      text-decoration: underline;
+      cursor: pointer;
+      margin: 0 10px;
+      display: inline-block;
+    }
+    #results { 
+      width: 100%;
+      max-width: 800px;
+      margin: 20px auto;
+    }
+    .event { 
+      border-bottom: 1px solid #ddd;
+      padding: 15px;
+      background: white;
+      margin-bottom: 10px;
+      border-radius: 4px;
+    }
+    .copy-btn { 
+      margin-left: 5px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      background: #eee;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+    }
+    pre { 
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #f8f8f8;
+      padding: 15px;
+      border-radius: 4px;
+      margin: 10px 0;
+    }
+    h1 {
+      margin-bottom: 30px;
+    }
   </style>
 </head>
 <body>
   <h1>Nostr Search</h1>
-  <input id="searchInput" type="text" placeholder="Enter search query...">
-  <button id="searchButton">Search</button>
+
+  <div class="search-container">
+    <input id="searchInput" type="text" placeholder="Enter search query...">
+    <button id="searchButton">Search</button>
+  </div>
+
+  <div id="examples">
+    Examples:
+    <span class="example">bitcoin</span>
+    <span class="example">kind:1 limit:5</span>
+    <span class="example">tag:e:some_event_id</span>
+    <span class="example">-"bitcoin"</span>
+    <span class="example">-kind:1</span>
+    <span class="example">-"bitcoin" -kind:1</span>
+  </div>
+
+  <div id="filters">
+    Supported filters: pubkey:&lt;hex_or_npub&gt;, relay:&lt;url&gt;, kind:&lt;number&gt;, 
+    since:&lt;timestamp&gt;, until:&lt;timestamp&gt;, tag:&lt;key&gt;:&lt;value&gt;, 
+    limit:&lt;number&gt;, offset:&lt;number&gt;, free text.<br>
+    Prefix <code>-</code> to any filter or term to exclude matching events.
+  </div>
+
   <div id="results"></div>
   <script src="app.js"></script>
 </body>

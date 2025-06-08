@@ -150,6 +150,13 @@ class Storage:
         until=None,
         limit=100,
         offset=0,
+        not_pubkey=None,
+        not_relay=None,
+        not_q=None,
+        not_kind=None,
+        not_tags=None,
+        not_since=None,
+        not_until=None,
     ):
         """
         Query events with optional filters.
@@ -164,6 +171,13 @@ class Storage:
             until: Return events created before this time (timestamp or ISO format)
             limit: Maximum number of events to return (default: 100)
             offset: Pagination offset (default: 0)
+            not_pubkey: Exclude events from this public key
+            not_relay: Exclude events from this relay
+            not_q: Exclude events matching this text query
+            not_kind: Exclude events of this kind
+            not_tags: Exclude events containing tag key:value pairs. List of [key, value] lists
+            not_since: Exclude events created after this time
+            not_until: Exclude events created before this time
 
         Returns a tuple of (events, total_count).
         """
@@ -209,6 +223,43 @@ class Storage:
                 if until is not None:
                     wheres.append("e.created_at <= %s")
                     params.append(until)
+
+                # Negative time filters
+                if not_since is not None:
+                    wheres.append("e.created_at < %s")
+                    params.append(not_since)
+                if not_until is not None:
+                    wheres.append("e.created_at > %s")
+                    params.append(not_until)
+
+                # Negative relay and key filters
+                if not_relay:
+                    neg_relay = not_relay if not_relay.startswith("wss://") else f"wss://{not_relay}"
+                    wheres.append(
+                        "e.id NOT IN (SELECT event_id FROM event_sources WHERE relay_url = %s)"
+                    )
+                    params.append(neg_relay)
+
+                if not_pubkey:
+                    wheres.append("e.pubkey != %s")
+                    params.append(not_pubkey)
+
+                if not_kind is not None:
+                    wheres.append("e.kind != %s")
+                    params.append(not_kind)
+
+                # Negative tag filters
+                if not_tags:
+                    for tag in not_tags:
+                        wheres.append("NOT ((e.raw_data->'tags') @> %s::jsonb)")
+                        params.append(json.dumps([tag]))
+
+                # Negative full-text filters
+                if not_q:
+                    wheres.append(
+                        "NOT (to_tsvector('english', e.content) @@ plainto_tsquery('english', %s))"
+                    )
+                    params.append(not_q)
 
                 if joins:
                     query += " " + " ".join(joins)

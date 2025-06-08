@@ -7,13 +7,35 @@ const resultsEl = document.getElementById('results');
 buttonEl.addEventListener('click', () => performSearch());
 inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') performSearch(); });
 
+const exampleEls = document.querySelectorAll('.example');
+exampleEls.forEach(el => {
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    inputEl.value = el.textContent;
+    performSearch();
+  });
+});
+
 async function performSearch() {
   const query = inputEl.value.trim();
-  const tokens = query ? query.split(/\s+/) : [];
+  // Tokenize on whitespace, keeping quoted phrases together and handling negation
+  const tokens = query
+    ? query.match(/(?:-?"[^"]+"|-?\S+)/g) || []
+    : [];
   const params = new URLSearchParams();
   const freeText = [];
 
-  for (const token of tokens) {
+  for (let token of tokens) {
+    let neg = false;
+    if (token.startsWith('-')) {
+      neg = true;
+      token = token.slice(1);
+    }
+    // Strip surrounding quotes
+    if ((token.startsWith('"') && token.endsWith('"')) ||
+        (token.startsWith("'") && token.endsWith("'"))) {
+      token = token.slice(1, -1);
+    }
     const parts = token.split(':');
     if (parts.length >= 2) {
       const key = parts[0];
@@ -26,14 +48,19 @@ async function performSearch() {
         case 'until':
         case 'limit':
         case 'offset':
-          params.append(key, value);
+          params.append(neg ? `not-${key}` : key, value);
           continue;
         case 'tag':
-          params.append('tag', value);
+          params.append(neg ? 'not-tag' : 'tag', value);
           continue;
       }
     }
-    freeText.push(token);
+    // Free-text term
+    if (neg) {
+      params.append('not-q', token);
+    } else {
+      freeText.push(token);
+    }
   }
   if (freeText.length) {
     params.append('q', freeText.join(' '));
@@ -45,9 +72,47 @@ async function performSearch() {
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.status === 'success') {
-      const header = `<p>Found ${data.count} of ${data.total} events.</p>`;
-      const body = `<pre>${JSON.stringify(data.events, null, 2)}</pre>`;
-      resultsEl.innerHTML = header + body;
+      resultsEl.innerHTML = `<p>Found ${data.count} of ${data.total} events.</p>`;
+      data.events.forEach(ev => {
+        const evDiv = document.createElement('div');
+        evDiv.className = 'event';
+
+        const idP = document.createElement('p');
+        idP.innerHTML = `<strong>id:</strong> <span class="ev-id">${ev.id}</span>`;
+        const idBtn = document.createElement('button');
+        idBtn.textContent = 'Copy';
+        idBtn.className = 'copy-btn';
+        idBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.id));
+        idP.appendChild(idBtn);
+        evDiv.appendChild(idP);
+
+        const pkP = document.createElement('p');
+        pkP.innerHTML = `<strong>pubkey:</strong> <span class="ev-pubkey">${ev.pubkey}</span>`;
+        const pkBtn = document.createElement('button');
+        pkBtn.textContent = 'Copy';
+        pkBtn.className = 'copy-btn';
+        pkBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.pubkey));
+        pkP.appendChild(pkBtn);
+        evDiv.appendChild(pkP);
+
+        const contentP = document.createElement('p');
+        contentP.innerHTML = `<strong>content:</strong> ${ev.content}`;
+        evDiv.appendChild(contentP);
+
+        if (ev.tags && ev.tags.length) {
+          const tagsP = document.createElement('p');
+          tagsP.innerHTML = `<strong>tags:</strong> ${ev.tags.map(t => t.join(':')).join(', ')}`;
+          evDiv.appendChild(tagsP);
+        }
+
+        if (ev.relays && ev.relays.length) {
+          const relaysP = document.createElement('p');
+          relaysP.innerHTML = `<strong>relays:</strong> ${ev.relays.join(', ')}`;
+          evDiv.appendChild(relaysP);
+        }
+
+        resultsEl.appendChild(evDiv);
+      });
     } else {
       resultsEl.innerHTML = `<p>Error: ${data.message || data.detail}</p>`;
     }

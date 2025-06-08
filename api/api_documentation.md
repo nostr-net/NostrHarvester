@@ -25,9 +25,16 @@ Retrieve events with optional filtering.
 | since     | string | Return events created after this time (timestamp or ISO format) |
 | until     | string | Return events created before this time (timestamp or ISO format) |
 | kind      | number | Filter events by kind |
-| tag       | string | Filter events by tag key:value pair (repeatable) |
-| limit     | number | Maximum number of events to return (default: 100, max: 1000) |
-| offset    | number | Pagination offset (default: 0) |
+| tag         | string | Filter events by tag key:value pair (repeatable) |
+| not-pubkey  | string | Exclude events from this public key |
+| not-relay   | string | Exclude events from this relay |
+| not-q       | string | Exclude events matching this text query |
+| not-since   | string | Exclude events created after this time |
+| not-until   | string | Exclude events created before this time |
+| not-kind    | number | Exclude events of this kind |
+| not-tag     | string | Exclude events by tag key:value pair (repeatable) |
+| limit       | number | Maximum number of events to return (default: 100, max: 1000) |
+| offset      | number | Pagination offset (default: 0) |
 
 **Response:**
 

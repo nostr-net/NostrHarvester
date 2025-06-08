@@ -43,6 +43,7 @@ A simple search interface inspired by early-day Google is available at `http://l
 - `tag:<key>:<value>` filter by tag key:value pairs (repeatable)
 - `limit:<number>` and `offset:<number>` for pagination
 - free text terms for full-text content search
+- prefix `-` to any filter or term to exclude matching events (e.g., `-"bitcoin"`, `-kind:1`)
 
 Nostr Harvester indexes events from a list of Nostr relays and exposes them through a small FastAPI service.  It stores events in PostgreSQL and keeps track of which relay each event came from.
 

@@ -30,19 +30,26 @@ async def startup():
 
 @app.get("/api/events", response_model=Dict[str, Any])
 async def get_events(
-    pubkey: Optional[str] = None, 
+    pubkey: Optional[str] = None,
     relay: Optional[str] = None,
     q: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     kind: Optional[int] = None,
     tags: Optional[List[str]] = Query(None, alias='tag'),
+    not_pubkey: Optional[str] = Query(None, alias='not-pubkey'),
+    not_relay: Optional[str] = Query(None, alias='not-relay'),
+    not_q: Optional[str] = Query(None, alias='not-q'),
+    not_kind: Optional[int] = Query(None, alias='not-kind'),
+    not_tags: Optional[List[str]] = Query(None, alias='not-tag'),
+    not_since: Optional[str] = Query(None, alias='not-since'),
+    not_until: Optional[str] = Query(None, alias='not-until'),
     limit: Optional[int] = Query(100, ge=1, le=1000),
-    offset: Optional[int] = Query(0, ge=0)
+    offset: Optional[int] = Query(0, ge=0),
 ):
     """
     Get events with optional filters.
-    
+
     - **pubkey**: Filter events by public key (hex or npub format)
     - **relay**: Filter events by the relay they were received from
     - **q**: Search for text within event content
@@ -50,6 +57,13 @@ async def get_events(
     - **until**: Return events created before this time (timestamp or ISO format)
     - **kind**: Filter events by kind
     - **tag**: Filter events containing tag key:value pairs. Can be repeated.
+    - **not-pubkey**: Exclude events from this public key
+    - **not-relay**: Exclude events from this relay
+    - **not-q**: Exclude events matching this text query
+    - **not-kind**: Exclude events of this kind
+    - **not-tag**: Exclude events containing tag key:value pairs. Can be repeated.
+    - **not-since**: Exclude events created after this time
+    - **not-until**: Exclude events created before this time
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
@@ -61,14 +75,27 @@ async def get_events(
             return JSONResponse(
                 status_code=400,
                 content={
-                    'status': 'error',
-                    'message': 'Invalid pubkey format. Use either hex or npub format.'
+                    'status': 'error', 'message': 'Invalid pubkey format. Use either hex or npub format.'
+                }
+            )
+
+        # Normalize not-pubkey if provided
+        normalized_not_pubkey = normalize_pubkey(not_pubkey) if not_pubkey else None
+        if not_pubkey and not normalized_not_pubkey:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    'status': 'error', 'message': 'Invalid not-pubkey format. Use either hex or npub format.'
                 }
             )
 
         # Parse time filters
         since_ts = parse_time_filter(since) if since else None
         until_ts = parse_time_filter(until) if until else None
+
+        # Parse negative time filters
+        not_since_ts = parse_time_filter(not_since) if not_since else None
+        not_until_ts = parse_time_filter(not_until) if not_until else None
 
         # Parse tag filters in the format key:value
         tag_pairs = []
@@ -82,6 +109,18 @@ async def get_events(
                 k, v = tag.split(':', 1)
                 tag_pairs.append([k, v])
 
+        # Parse negative tag filters in the format key:value
+        not_tag_pairs = []
+        if not_tags:
+            for tag in not_tags:
+                if ':' not in tag:
+                    return JSONResponse(
+                        status_code=400,
+                        content={'status': 'error', 'message': 'Tag filters must be in key:value format'}
+                    )
+                k, v = tag.split(':', 1)
+                not_tag_pairs.append([k, v])
+
         events, total_count = storage.query_events(
             pubkey=normalized_pubkey,
             relay=relay,
@@ -90,6 +129,13 @@ async def get_events(
             tags=tag_pairs if tag_pairs else None,
             since=since_ts,
             until=until_ts,
+            not_pubkey=normalized_not_pubkey,
+            not_relay=not_relay,
+            not_q=not_q,
+            not_kind=not_kind,
+            not_tags=not_tag_pairs if not_tag_pairs else None,
+            not_since=not_since_ts,
+            not_until=not_until_ts,
             limit=limit,
             offset=offset,
         )
