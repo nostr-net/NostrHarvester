@@ -59,6 +59,64 @@ def get_events():
             limit=limit,
             offset=offset,
         )
+        # Build query
+        query = """
+            SELECT DISTINCT e.* FROM events e
+        """
+        params = []
+        where_clauses = []
+
+        if relay:
+            query += " LEFT JOIN event_sources es ON e.id = es.event_id"
+            relay_url = relay if relay.startswith('wss://') else f'wss://{relay}'
+            where_clauses.append("es.relay_url = %s")
+            params.append(relay_url)
+
+        if pubkey:
+            where_clauses.append("e.pubkey = %s")
+            params.append(pubkey)
+
+        if kind is not None:
+            where_clauses.append("e.kind = %s")
+            params.append(kind)
+
+        if search_text:
+            where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")
+            params.append(search_text)
+
+        if since_ts:
+            where_clauses.append("e.created_at >= %s")
+            params.append(since_ts)
+        if until_ts:
+            where_clauses.append("e.created_at <= %s")
+            params.append(until_ts)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        # Add ordering and pagination
+        query += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+
+        # Execute query
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+            cursor.execute(query, params)
+            events = cursor.fetchall()
+
+            # Add relay sources and npub for each event
+            for event in events:
+                cursor.execute(
+                    "SELECT relay_url FROM event_sources WHERE event_id = %s", 
+                    (event['id'],)
+                )
+                event['relays'] = [r['relay_url'] for r in cursor.fetchall()]
+                event['npub'] = pubkey_to_bech32(event['pubkey'])
+
+            # Get total count for pagination
+            count_query = f"SELECT COUNT(DISTINCT e.id) FROM ({query}) as e"
+            cursor.execute(count_query, params)
+            total_count = cursor.fetchone()['count']
 
         return jsonify({
             'status': 'success',
