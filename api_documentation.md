@@ -25,6 +25,7 @@ Retrieve events with optional filtering.
 | since     | string | Return events created after this time (timestamp or ISO format) |
 | until     | string | Return events created before this time (timestamp or ISO format) |
 | kind      | number | Filter events by kind |
+| tag       | string | Filter events by tag key:value pair (repeatable) |
 | limit     | number | Maximum number of events to return (default: 100, max: 1000) |
 | offset    | number | Pagination offset (default: 0) |
 
@@ -252,8 +253,8 @@ class NostrIndexerClient:
     def __init__(self, base_url):
         self.base_url = base_url.rstrip('/')
     
-    def get_events(self, pubkey=None, relay=None, query=None, 
-                  since=None, until=None, kind=None, 
+    def get_events(self, pubkey=None, relay=None, query=None,
+                  since=None, until=None, kind=None, tags=None,
                   limit=100, offset=0):
         """Get events with optional filters"""
         params = {
@@ -273,6 +274,9 @@ class NostrIndexerClient:
             params['until'] = until
         if kind is not None:
             params['kind'] = kind
+        if tags:
+            for t in tags:
+                params.setdefault('tag', []).append(t)
             
         response = requests.get(f"{self.base_url}/api/events", params=params)
         return response.json()
