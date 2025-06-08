@@ -1,0 +1,24 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      PGDATABASE: nostr
+      PGUSER: nostr
+      PGPASSWORD: nostr
+      PGHOST: db
+      PGPORT: 5432
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: nostr
+      POSTGRES_USER: nostr
+      POSTGRES_PASSWORD: nostr
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+volumes:
+  postgres_data:
