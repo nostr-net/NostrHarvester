@@ -3,10 +3,9 @@ import psycopg2
 import psycopg2.extras
 import logging
 from typing import Optional, List, Dict, Any
-import json
 import atexit
-from utils import normalize_pubkey, parse_time_filter
-from storage import Storage
+from common.utils import normalize_pubkey, parse_time_filter
+from common.storage import Storage
 from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
@@ -79,74 +78,12 @@ async def get_events(
             relay=relay,
             q=q,
             kind=kind,
+            tags=tag_pairs if tag_pairs else None,
             since=since_ts,
             until=until_ts,
             limit=limit,
             offset=offset,
         )
-        # Build query
-        query = """
-            SELECT DISTINCT e.* FROM events e
-        """
-        params = []
-        where_clauses = []
-
-        if relay:
-            query += " LEFT JOIN event_sources es ON e.id = es.event_id"
-            relay_url = relay if relay.startswith('wss://') else f'wss://{relay}'
-            where_clauses.append("es.relay_url = %s")
-            params.append(relay_url)
-
-        if normalized_pubkey:
-            where_clauses.append("e.pubkey = %s")
-            params.append(normalized_pubkey)
-
-        if kind is not None:
-            where_clauses.append("e.kind = %s")
-            params.append(kind)
-
-        for k, v in tag_pairs:
-            where_clauses.append("(e.raw_data->'tags') @> %s::jsonb")
-            params.append(json.dumps([[k, v]]))
-
-        if q:
-            where_clauses.append("to_tsvector('english', e.content) @@ plainto_tsquery(%s)")
-            params.append(q)
-
-        if since_ts:
-            where_clauses.append("e.created_at >= %s")
-            params.append(since_ts)
-        if until_ts:
-            where_clauses.append("e.created_at <= %s")
-            params.append(until_ts)
-
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
-
-        # Add ordering and pagination
-        query += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        # Execute query
-        conn = storage.pool.getconn()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            cursor.execute(query, params)
-            events = cursor.fetchall()
-
-            # Add relay sources and npub for each event
-            for event in events:
-                cursor.execute(
-                    "SELECT relay_url FROM event_sources WHERE event_id = %s", 
-                    (event['id'],)
-                )
-                event['relays'] = [r['relay_url'] for r in cursor.fetchall()]
-                event['npub'] = pubkey_to_bech32(event['pubkey'])
-
-            # Get total count for pagination
-            count_query = f"SELECT COUNT(DISTINCT e.id) FROM ({query}) as e"
-            cursor.execute(count_query, params)
-            total_count = cursor.fetchone()['count']
-
         return {
             'status': 'success',
             'count': len(events),
@@ -157,7 +94,7 @@ async def get_events(
         }
 
     except Exception as e:
-        logger.error(f"Error processing request: {e}")
+        logger.exception(f"Error processing request: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error processing request: {str(e)}"
@@ -241,4 +178,4 @@ atexit.register(cleanup)
 
 if __name__ == '__main__':
     import uvicorn
-    uvicorn.run("api_fastapi:app", host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run("api.api_fastapi:app", host="0.0.0.0", port=8000, reload=True)

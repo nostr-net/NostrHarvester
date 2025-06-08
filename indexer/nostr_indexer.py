@@ -2,10 +2,10 @@
 import asyncio
 import logging
 import json
-from relay_manager import RelayManager
-from event_processor import EventProcessor
-from storage import Storage
-from config_manager import ConfigManager
+from indexer.relay_manager import RelayManager
+from indexer.event_processor import EventProcessor
+from common.storage import Storage
+from indexer.config_manager import ConfigManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,17 +59,31 @@ class NostrIndexer:
         relay=None,
         q=None,
         kind=None,
+        tags=None,
         since=None,
         until=None,
         limit=100,
         offset=0,
     ):
-        """Query stored events with optional filters"""
+        """
+        Query stored events with optional filters.
+
+        - pubkey: Filter events by public key (hex or npub format)
+        - relay: Filter events by the relay they were received from
+        - q: Search for text within event content
+        - kind: Filter events by kind
+        - tags: Filter events containing tag key:value pairs. List of [key, value] lists
+        - since: Return events created after this time (timestamp or ISO format)
+        - until: Return events created before this time (timestamp or ISO format)
+        - limit: Maximum number of events to return (default: 100)
+        - offset: Pagination offset (default: 0)
+        """
         return self.storage.query_events(
             pubkey=pubkey,
             relay=relay,
             q=q,
             kind=kind,
+            tags=tags,
             since=since,
             until=until,
             limit=limit,

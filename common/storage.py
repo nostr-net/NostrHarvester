@@ -5,7 +5,7 @@ import asyncio
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from psycopg2.extras import RealDictCursor
-from utils import pubkey_to_bech32
+from .utils import pubkey_to_bech32
 
 logger = logging.getLogger(__name__)
 
@@ -145,14 +145,26 @@ class Storage:
         relay=None,
         q=None,
         kind=None,
+        tags=None,
         since=None,
         until=None,
         limit=100,
         offset=0,
     ):
-        """Query events with optional filters.
+        """
+        Query events with optional filters.
 
-        Parameters mirror the API query parameters.
+        Parameters:
+            pubkey: Filter events by public key (hex)
+            relay: Filter events by the relay they were received from
+            q: Search for text within event content
+            kind: Filter events by kind
+            tags: Filter events containing tag key:value pairs. List of [key, value] lists
+            since: Return events created after this time (timestamp or ISO format)
+            until: Return events created before this time (timestamp or ISO format)
+            limit: Maximum number of events to return (default: 100)
+            offset: Pagination offset (default: 0)
+
         Returns a tuple of (events, total_count).
         """
         if not self.pool:
@@ -161,78 +173,67 @@ class Storage:
         conn = self.pool.getconn()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                base_query = "SELECT DISTINCT e.* FROM events e"
-                join_clause = ""
+                query = "SELECT DISTINCT e.* FROM events e"
+                joins = []
+                wheres = []
                 params = []
-                if filters:
-                    where_clauses = []
-                    if 'kinds' in filters:
-                        where_clauses.append("kind = ANY(%s)")
-                        params.append(filters['kinds'])
-                    if 'tags' in filters:
-                        for tag_pair in filters['tags']:
-                            where_clauses.append("(raw_data->'tags') @> %s::jsonb")
-                            params.append(json.dumps([tag_pair]))
-                    if 'since' in filters:
-                        where_clauses.append("created_at >= %s")
-                        params.append(filters['since'])
-                    if 'until' in filters:
-                        where_clauses.append("created_at <= %s")
-                        params.append(filters['until'])
-                    if where_clauses:
-                        query += " WHERE " + " AND ".join(where_clauses)
-                where_clauses = []
 
                 if relay:
-                    join_clause = " LEFT JOIN event_sources es ON e.id = es.event_id"
+                    joins.append("LEFT JOIN event_sources es ON e.id = es.event_id")
                     relay_url = relay if relay.startswith("wss://") else f"wss://{relay}"
-                    where_clauses.append("es.relay_url = %s")
+                    wheres.append("es.relay_url = %s")
                     params.append(relay_url)
 
                 if pubkey:
-                    where_clauses.append("e.pubkey = %s")
+                    wheres.append("e.pubkey = %s")
                     params.append(pubkey)
 
                 if kind is not None:
-                    where_clauses.append("e.kind = %s")
+                    wheres.append("e.kind = %s")
                     params.append(kind)
 
+                if tags:
+                    for tag in tags:
+                        wheres.append("(e.raw_data->'tags') @> %s::jsonb")
+                        params.append(json.dumps([tag]))
+
                 if q:
-                    where_clauses.append(
+                    wheres.append(
                         "to_tsvector('english', e.content) @@ plainto_tsquery('english', %s)"
                     )
                     params.append(q)
 
                 if since is not None:
-                    where_clauses.append("e.created_at >= %s")
+                    wheres.append("e.created_at >= %s")
                     params.append(since)
                 if until is not None:
-                    where_clauses.append("e.created_at <= %s")
+                    wheres.append("e.created_at <= %s")
                     params.append(until)
 
-                query = base_query + join_clause
-                if where_clauses:
-                    query += " WHERE " + " AND ".join(where_clauses)
+                if joins:
+                    query += " " + " ".join(joins)
+                if wheres:
+                    query += " WHERE " + " AND ".join(wheres)
 
-                order_pagination = " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
-                query += order_pagination
+                query += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
                 params.extend([limit, offset])
 
                 cursor.execute(query, params)
                 events = cursor.fetchall()
 
-                # Fetch relay sources and bech32 pubkey for each event
                 for event in events:
                     cursor.execute(
                         "SELECT relay_url FROM event_sources WHERE event_id = %s",
                         (event["id"],),
                     )
-                    event["relays"] = [r[0] for r in cursor.fetchall()]
+                    event["relays"] = [r["relay_url"] for r in cursor.fetchall()]
                     event["npub"] = pubkey_to_bech32(event["pubkey"])
 
-                count_query = f"SELECT COUNT(DISTINCT e.id) FROM events e{join_clause}"
-                if where_clauses:
-                    count_query += " WHERE " + " AND ".join(where_clauses)
+                count_query = "SELECT COUNT(DISTINCT e.id) FROM events e"
+                if joins:
+                    count_query += " " + " ".join(joins)
+                if wheres:
+                    count_query += " WHERE " + " AND ".join(wheres)
                 cursor.execute(count_query, params[:-2])
                 total_count = cursor.fetchone()["count"]
 

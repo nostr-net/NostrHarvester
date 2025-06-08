@@ -11,7 +11,11 @@ This project indexes Nostr events and exposes them via a FastAPI service.
 docker-compose up --build
 ```
 
+Ensure you have a `indexer/config.json` file (or copy from `indexer/config.json.example`) specifying your relay list; this file will be mounted into the indexer container.
+
 The API will be available at `http://localhost:8000`.
+
+The indexer service will also be started, connecting to relays and populating the database.
 
 ### Environment Variables
 
@@ -25,20 +29,22 @@ The application reads PostgreSQL connection details from environment variables. 
 
 You can override them by editing `docker-compose.yml` or providing your own environment file.
 
-See `api_documentation.md` for API usage examples.
+See `api/api_documentation.md` for API usage examples.
 Nostr Harvester indexes events from a list of Nostr relays and exposes them through a small FastAPI service.  It stores events in PostgreSQL and keeps track of which relay each event came from.
 
 ## Installation
 
-Create a Python virtual environment and install the required packages:
+Each service has its own Python dependencies:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# Install API service dependencies
+pip install -r api/requirements.txt
+
+# Install Indexer service dependencies
+pip install -r indexer/requirements.txt
 ```
 
-For running the test suite also install the optional dependencies:
+Optionally, install test dependencies:
 
 ```bash
 pip install -e .[test]
@@ -46,11 +52,21 @@ pip install -e .[test]
 
 ## Usage
 
-Start the harvester API using `uvicorn`:
+### Local Execution
+
+#### Harvester API
+
+Start the API using Uvicorn:
 
 ```bash
-python api_fastapi.py
+uvicorn api.api_fastapi:app --reload
 ```
 
-The script `nostr_indexer.py` contains the logic for connecting to relays and storing events.
+#### Indexer
+
+Start the indexer (ensure `indexer/config.json` is present with your relay list):
+
+```bash
+python -m indexer.nostr_indexer
+```
 

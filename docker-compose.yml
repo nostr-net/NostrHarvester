@@ -1,11 +1,27 @@
 version: "3.9"
 services:
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports:
       - "8008:8000"
     depends_on:
       - db
+    environment:
+      PGDATABASE: nostr
+      PGUSER: nostr
+      PGPASSWORD: nostr
+      PGHOST: db
+      PGPORT: 5432
+  indexer:
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile
+    depends_on:
+      - db
+    volumes:
+      - ./indexer/config.json:/app/config.json
     environment:
       PGDATABASE: nostr
       PGUSER: nostr

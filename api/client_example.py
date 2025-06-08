@@ -12,8 +12,8 @@ class NostrIndexerClient:
         """
         self.base_url = base_url.rstrip('/')
     
-    def get_events(self, pubkey=None, relay=None, query=None, 
-                  since=None, until=None, kind=None, 
+    def get_events(self, pubkey=None, relay=None, query=None,
+                  since=None, until=None, kind=None, tags=None,
                   limit=100, offset=0):
         """Get events with optional filters
         
@@ -24,6 +24,7 @@ class NostrIndexerClient:
             since (int/str, optional): Start time (timestamp or ISO)
             until (int/str, optional): End time (timestamp or ISO)
             kind (int, optional): Event kind
+            tags (list[str], optional): Tag filters in 'key:value' format
             limit (int, optional): Max number of events to return
             offset (int, optional): Pagination offset
             
@@ -47,6 +48,9 @@ class NostrIndexerClient:
             params['until'] = until
         if kind is not None:
             params['kind'] = kind
+        if tags:
+            for t in tags:
+                params.setdefault('tag', []).append(t)
             
         response = requests.get(f"{self.base_url}/api/events", params=params)
         return response.json()
