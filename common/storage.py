@@ -6,6 +6,7 @@ import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from psycopg2.extras import RealDictCursor
 from .utils import pubkey_to_bech32
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +15,11 @@ class Storage:
         self.lock = asyncio.Lock()
         self.pool = None
         self.db_config = {
-            'dbname': os.environ['PGDATABASE'],
-            'user': os.environ['PGUSER'],
-            'password': os.environ['PGPASSWORD'],
-            'host': os.environ['PGHOST'],
-            'port': os.environ['PGPORT']
+            'dbname': settings.pg_database,
+            'user': settings.pg_user,
+            'password': settings.pg_password,
+            'host': settings.pg_host,
+            'port': settings.pg_port,
         }
         self._max_retries = 3
         self._retry_delay = 1  # seconds
@@ -28,7 +29,11 @@ class Storage:
         for attempt in range(self._max_retries):
             try:
                 if not self.pool:
-                    self.pool = SimpleConnectionPool(1, 10, **self.db_config)
+                    self.pool = SimpleConnectionPool(
+                        settings.pool_min_size,
+                        settings.pool_max_size,
+                        **self.db_config
+                    )
                 return True
             except Exception as e:
                 if attempt == self._max_retries - 1:
@@ -45,18 +50,51 @@ class Storage:
             try:
                 await self._init_pool()
 
-                # Initialize schema
-                conn = self.pool.getconn()
-                try:
-                    with conn.cursor() as cursor, open('schema.sql', 'r') as f:
-                        cursor.execute(f.read())
-                    conn.commit()
-                    logger.info("Database schema initialized successfully")
-                finally:
-                    self.pool.putconn(conn)
+                # Run versioned database migrations instead of legacy schema file
+                await self._run_migrations()
             except Exception as e:
                 logger.error(f"Error initializing database: {e}")
                 raise
+
+    async def _run_migrations(self):
+        """Run any pending SQL migration scripts in migrations/ directory."""
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version VARCHAR(255) PRIMARY KEY,
+                        applied_at TIMESTAMP NOT NULL DEFAULT now()
+                    )
+                """)
+                conn.commit()
+                migrations_dir = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), '..', 'migrations')
+                )
+                if not os.path.isdir(migrations_dir):
+                    logger.warning(
+                        f"No migrations directory found at {migrations_dir}, skipping migrations"
+                    )
+                    return
+                for filename in sorted(os.listdir(migrations_dir)):
+                    if not filename.endswith('.sql'):
+                        continue
+                    version = filename.split('_', 1)[0]
+                    cursor.execute(
+                        "SELECT 1 FROM schema_migrations WHERE version = %s", (version,)
+                    )
+                    if cursor.fetchone():
+                        continue
+                    logger.info(f"Applying migration {filename}")
+                    with open(os.path.join(migrations_dir, filename), 'r') as f:
+                        cursor.execute(f.read())
+                    cursor.execute(
+                        "INSERT INTO schema_migrations (version) VALUES (%s)", (version,)
+                    )
+                    conn.commit()
+            logger.info("Database migrations applied successfully")
+        finally:
+            self.pool.putconn(conn)
 
     async def store_event(self, event):
         """Store a Nostr event"""
@@ -291,6 +329,78 @@ class Storage:
                 return events, total_count
         finally:
             self.pool.putconn(conn)
+
+    async def store_events(self, events):
+        if not events:
+            return
+        if not self.pool:
+            await self.initialize()
+        async with self.lock:
+            conn = self.pool.getconn()
+            try:
+                with conn.cursor() as cursor:
+                    values = [
+                        (
+                            e.get('id'),
+                            e.get('pubkey'),
+                            e.get('created_at', 0) if isinstance(e.get('created_at', 0), int) and e.get('created_at', 0) >= 0 else 0,
+                            e.get('kind'),
+                            e.get('content'),
+                            e.get('sig'),
+                            json.dumps(e),
+                        )
+                        for e in events
+                    ]
+                    args_str = ",".join(
+                        cursor.mogrify("(%s,%s,%s,%s,%s,%s,%s)", v).decode() for v in values
+                    )
+                    cursor.execute(
+                        f"INSERT INTO events (id, pubkey, created_at, kind, content, sig, raw_data) "
+                        f"VALUES {args_str} ON CONFLICT (id) DO NOTHING"
+                    )
+                conn.commit()
+            finally:
+                self.pool.putconn(conn)
+
+    async def store_event_sources_batch(self, sources):
+        if not sources:
+            return
+        if not self.pool:
+            await self.initialize()
+        async with self.lock:
+            conn = self.pool.getconn()
+            try:
+                with conn.cursor() as cursor:
+                    values = []
+                    for event_id, relay_url, response_time_ms in sources:
+                        current_time = int(asyncio.get_event_loop().time())
+                        rt = response_time_ms if isinstance(response_time_ms, int) else None
+                        if rt and rt > 2147483647:
+                            rt = 2147483647
+                        if rt and rt < 0:
+                            rt = 0
+                        values.append((event_id, relay_url, current_time, rt))
+                    args_str = ",".join(
+                        cursor.mogrify("(%s,%s,%s,%s)", v).decode() for v in values
+                    )
+                    cursor.execute(
+                        f"""
+                        INSERT INTO event_sources (
+                            event_id, relay_url, first_seen_at, response_time_ms
+                        )
+                        SELECT t.event_id, t.relay_url, t.first_seen_at, t.response_time_ms
+                        FROM (VALUES {args_str}) AS t(
+                            event_id, relay_url, first_seen_at, response_time_ms
+                        )
+                        WHERE EXISTS (
+                            SELECT 1 FROM events e WHERE e.id = t.event_id
+                        )
+                        ON CONFLICT (event_id, relay_url) DO NOTHING
+                        """
+                    )
+                conn.commit()
+            finally:
+                self.pool.putconn(conn)
 
     def get_event_sources(self, event_id):
         """Get all relays where an event was found"""

@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   app:
     build:
@@ -7,27 +6,21 @@ services:
     ports:
       - "8008:8000"
     depends_on:
+      - migrate
       - db
-    environment:
-      PGDATABASE: nostr
-      PGUSER: nostr
-      PGPASSWORD: nostr
-      PGHOST: db
-      PGPORT: 5432
+    env_file:
+      - .env
   indexer:
     build:
       context: .
       dockerfile: indexer/Dockerfile
     depends_on:
+      - migrate
       - db
     volumes:
       - ./indexer/config.json:/app/config.json
-    environment:
-      PGDATABASE: nostr
-      PGUSER: nostr
-      PGPASSWORD: nostr
-      PGHOST: db
-      PGPORT: 5432
+    env_file:
+      - .env
   web:
     build:
       context: ./web
@@ -38,11 +31,19 @@ services:
       - app
   db:
     image: postgres:15
-    environment:
-      POSTGRES_DB: nostr
-      POSTGRES_USER: nostr
-      POSTGRES_PASSWORD: nostr
+    env_file:
+      - .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    command: ["postgres", "-c", "log_min_messages=${DB_LOG_LEVEL:-warning}", "-c", "log_statement=${DB_LOG_STATEMENT:-none}"]
+  migrate:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    depends_on:
+      - db
+    env_file:
+      - .env
+    command: ["python", "migrate.py"]
 volumes:
   postgres_data:

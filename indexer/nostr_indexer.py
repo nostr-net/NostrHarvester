@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import asyncio
 import logging
 import json
@@ -6,11 +7,31 @@ from indexer.relay_manager import RelayManager
 from indexer.event_processor import EventProcessor
 from common.storage import Storage
 from indexer.config_manager import ConfigManager
+from common.config import settings
+from prometheus_client import start_http_server, Gauge, Counter
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    level=settings.log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Prometheus metrics for indexer observability
+EVENTS_RECEIVED = Counter(
+    'events_received_total', 'Total number of events received and enqueued', ['relay_url']
+)
+NOTIFICATION_ERRORS = Counter(
+    'notification_errors_total', 'Total errors during notification handling'
+)
+RELAYS_CONFIGURED = Gauge(
+    'relays_configured', 'Number of relays configured'
+)
+DB_ACTIVE_CONNECTIONS = Gauge(
+    'db_active_connections', 'Number of active database connections'
+)
+DB_IDLE_CONNECTIONS = Gauge(
+    'db_idle_connections', 'Number of idle database connections'
+)
 
 
 class NostrIndexer:
@@ -24,6 +45,11 @@ class NostrIndexer:
         """Initialize all components"""
         logger.info("Initializing storage...")
         await self.storage.initialize()
+        # Start Prometheus metrics server if enabled
+        if settings.metrics_server_enabled:
+            start_http_server(settings.metrics_server_port)
+            logger.info(f"Prometheus metrics server started on port {settings.metrics_server_port}")
+            asyncio.create_task(self._metrics_refresh_loop())
 
         logger.info("Starting event processor...")
         await self.event_processor.start()
@@ -52,6 +78,26 @@ class NostrIndexer:
         logger.info("Cleaning up...")
         await self.event_processor.stop()
         await self.relay_manager.disconnect_all()
+
+    async def _metrics_refresh_loop(self):
+        """Background task to update Prometheus metrics periodically"""
+        while True:
+            # Configured relay count
+            RELAYS_CONFIGURED.set(len(self.config_manager.get_relays()))
+            # Database pool connections
+            pool = getattr(self.storage, 'pool', None)
+            if pool:
+                try:
+                    active = len(pool._used)
+                    idle = len(pool._pool)
+                except Exception:
+                    active = idle = 0
+            else:
+                active = idle = 0
+            DB_ACTIVE_CONNECTIONS.set(active)
+            DB_IDLE_CONNECTIONS.set(idle)
+            # Wait before next update
+            await asyncio.sleep(settings.metrics_refresh_interval_seconds)
 
     def query_events(
         self,

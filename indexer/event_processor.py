@@ -1,66 +1,97 @@
 import logging
-import json
 import asyncio
-from collections import defaultdict
+from common.config import settings
+from prometheus_client import Counter, Gauge
 
 logger = logging.getLogger(__name__)
+EVENTS_QUEUED = Counter(
+    'events_queued_total', 'Total number of events queued for processing'
+)
+EVENTS_PROCESSED = Counter(
+    'events_processed_total', 'Total number of events processed'
+)
+EVENT_PROCESSING_ERRORS = Counter(
+    'event_processing_errors_total', 'Total errors encountered during event processing'
+)
+EVENT_QUEUE_SIZE = Gauge(
+    'event_queue_size', 'Current size of the event processing queue'
+)
 
 class EventProcessor:
     def __init__(self, storage):
         self.storage = storage
         self.processing_queue = asyncio.Queue()
         self.seen_events = set()
-        self._queue_task = None
+        self._worker_tasks = []
 
     async def start(self):
-        """Initialize and start the event processing queue"""
-        logger.info("Starting event processor queue")
-        self._queue_task = asyncio.create_task(self.process_queue())
+        """Initialize and start the event processing batch workers"""
+        logger.info("Starting event processor workers")
+        for _ in range(settings.worker_pool_size):
+            task = asyncio.create_task(self._batch_worker())
+            self._worker_tasks.append(task)
 
     async def process_event(self, event, relay_url, response_time_ms=None):
         """Add event to processing queue"""
         logger.debug(f"Queuing event {event.get('id')} from {relay_url}")
         await self.processing_queue.put((event, relay_url, response_time_ms))
+        EVENTS_QUEUED.inc()
+        EVENT_QUEUE_SIZE.set(self.processing_queue.qsize())
 
-    async def process_queue(self):
-        """Process events from the queue"""
-        logger.info("Event queue processor started")
+    async def _batch_worker(self):
+        """Batch events from the queue and process them"""
+        logger.info("Batch worker started")
+        batch = []
         while True:
             try:
-                event, relay_url, response_time_ms = await self.processing_queue.get()
-                await self.handle_event(event, relay_url, response_time_ms)
-                self.processing_queue.task_done()
+                # Wait for first event
+                item = await self.processing_queue.get()
+                batch.append(item)
+                # Collect up to batch size or until timeout
+                while len(batch) < settings.event_batch_size:
+                    try:
+                        ev = await asyncio.wait_for(
+                            self.processing_queue.get(), timeout=settings.event_batch_interval
+                        )
+                        batch.append(ev)
+                    except asyncio.TimeoutError:
+                        break
+                await self._handle_batch(batch)
+                # Mark tasks done
+                for _ in batch:
+                    self.processing_queue.task_done()
+                batch = []
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"Error processing event: {e}")
+                EVENT_PROCESSING_ERRORS.inc()
+                logger.error(f"Error in batch worker: {e}")
 
-    async def handle_event(self, event, relay_url, response_time_ms):
-        """Process and store a single event"""
-        try:
+    async def _handle_batch(self, items):
+        """Handle a batch of events, storing new events and their sources"""
+        new_events = []
+        sources = []
+        for event, relay_url, response_time_ms in items:
             event_id = event.get('id')
             if not event_id:
-                logger.warning("Event missing ID, skipping")
-                return
-
-            # Check if we've seen this event before
+                continue
             if event_id not in self.seen_events:
                 self.seen_events.add(event_id)
-                # Store the event and its source
-                await self.storage.store_event(event)
-                await self.storage.store_event_source(event_id, relay_url, response_time_ms)
-                logger.debug(f"Stored new event {event_id} from {relay_url}")
-            else:
-                # Just store the additional source
-                await self.storage.store_event_source(event_id, relay_url, response_time_ms)
-                logger.debug(f"Added source {relay_url} for existing event {event_id}")
-
-        except Exception as e:
-            logger.error(f"Error handling event: {e}")
+                new_events.append(event)
+            sources.append((event_id, relay_url, response_time_ms))
+        if new_events:
+            await self.storage.store_events(new_events)
+        if sources:
+            await self.storage.store_event_sources_batch(sources)
+        EVENTS_PROCESSED.inc(len(items))
+        EVENT_QUEUE_SIZE.set(self.processing_queue.qsize())
 
     async def stop(self):
-        """Stop the event processor"""
-        if self._queue_task:
-            self._queue_task.cancel()
+        """Stop the event processor workers"""
+        for task in self._worker_tasks:
+            task.cancel()
+        for task in self._worker_tasks:
             try:
-                await self._queue_task
+                await task
             except asyncio.CancelledError:
                 pass

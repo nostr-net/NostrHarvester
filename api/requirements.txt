@@ -1,5 +1,9 @@
 bech32==1.2.0
 fastapi==0.110.0
+pydantic>=2.0,<3.0
 uvicorn==0.23.2
 psycopg2-binary==2.9.10
 requests==2.31.0
+prometheus_client>=0.14.0
+cachetools>=5.0.0,<6.0.0
+watchgod>=0.8.0,<1.0.0

@@ -1,13 +1,25 @@
-from fastapi import FastAPI, Query, Depends, HTTPException
-import psycopg2
-import psycopg2.extras
+from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 import logging
+import time
+import asyncio
+import os
+from watchgod import awatch
+import hmac
 from typing import Optional, List, Dict, Any
 import atexit
 from common.utils import normalize_pubkey, parse_time_filter
 from common.storage import Storage
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from common.config import settings, reload_settings
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import psycopg2
+import psycopg2.extras
+from cachetools import TTLCache
+import re
+
+# Sanitization pattern for query parameter 'q'
+SAFE_QUERY_PATTERN = re.compile(r'^[\w\s\-\.\:]+$')
 
 app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
 
@@ -18,15 +30,98 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
 # Storage instance
+# Storage instance
 storage = Storage()
+
+# In-memory TTL cache for expensive query results (e.g., stats)
+stats_cache = TTLCache(maxsize=settings.cache_maxsize, ttl=settings.cache_ttl_seconds)
+
+# In-memory rate limiting: mapping of client IP to request timestamps
+ip_request_log: dict[str, list[float]] = {}
 
 @app.on_event("startup")
 async def startup():
     await storage.initialize()
+    # Schedule periodic refresh of materialized views if enabled
+    if settings.use_materialized_views and settings.matview_refresh_interval_seconds > 0:
+        asyncio.create_task(_refresh_materialized_views_loop())
+    if settings.config_hot_reload_enabled:
+        asyncio.create_task(_config_hot_reload_loop())
+
+
+# Security hardening: API authentication middleware
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not settings.api_auth_enabled:
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    token = settings.api_auth_token
+    # Expect header in form 'Bearer <token>'
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    provided = auth_header[len("Bearer "):].strip()
+    # Constant-time comparison to mitigate timing attacks
+    if not hmac.compare_digest(provided, token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await call_next(request)
+
+
+# Security hardening: request size limiting middleware
+@app.middleware("http")
+async def request_size_limit_middleware(request: Request, call_next):
+    max_bytes = settings.request_max_size_bytes
+    if max_bytes > 0:
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > max_bytes:
+            raise HTTPException(status_code=413, detail="Request body too large")
+    return await call_next(request)
+
+
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if not settings.rate_limit_enabled:
+        return await call_next(request)
+    ip = request.client.host
+    now = time.time()
+    window_start = now - 60
+    timestamps = ip_request_log.get(ip, [])
+    timestamps = [t for t in timestamps if t > window_start]
+    timestamps.append(now)
+    ip_request_log[ip] = timestamps
+    if len(timestamps) > settings.rate_limit_requests_per_minute:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    return await call_next(request)
+
+# Prometheus metrics definitions and middleware
+REQUEST_COUNT = Counter(
+    'http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'http_status']
+)
+REQUEST_LATENCY = Histogram(
+    'http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint']
+)
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    if not settings.metrics_enabled:
+        return await call_next(request)
+    start_time = time.time()
+    response = await call_next(request)
+    resp_time = time.time() - start_time
+    REQUEST_LATENCY.labels(request.method, request.url.path).observe(resp_time)
+    REQUEST_COUNT.labels(request.method, request.url.path, response.status_code).inc()
+    return response
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    if not settings.metrics_enabled:
+        raise HTTPException(status_code=404, detail="Metrics disabled")
+    data = generate_latest()
+    return Response(data, media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/api/events", response_model=Dict[str, Any])
 async def get_events(
@@ -44,7 +139,9 @@ async def get_events(
     not_tags: Optional[List[str]] = Query(None, alias='not-tag'),
     not_since: Optional[str] = Query(None, alias='not-since'),
     not_until: Optional[str] = Query(None, alias='not-until'),
-    limit: Optional[int] = Query(100, ge=1, le=1000),
+    limit: Optional[int] = Query(
+        settings.max_event_query_limit, ge=1, le=settings.max_event_query_limit
+    ),
     offset: Optional[int] = Query(0, ge=0),
 ):
     """
@@ -67,6 +164,29 @@ async def get_events(
     - **limit**: Maximum number of events to return (default: 100, max: 1000)
     - **offset**: Pagination offset (default: 0)
     """
+    # Input sanitization for search query
+    if q is not None:
+        if len(q) > settings.max_query_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Query parameter 'q' too long (max {settings.max_query_length})"
+            )
+        if not SAFE_QUERY_PATTERN.match(q):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid characters in query parameter 'q'"
+            )
+    if not_q is not None:
+        if len(not_q) > settings.max_query_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Exclusion query parameter 'not-q' too long (max {settings.max_query_length})"
+            )
+        if not SAFE_QUERY_PATTERN.match(not_q):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid characters in exclusion query parameter 'not-q'"
+            )
     conn = None
     try:
         # Normalize pubkey if provided
@@ -148,11 +268,12 @@ async def get_events(
             'events': events
         }
 
-    except Exception as e:
-        logger.exception(f"Error processing request: {e}")
+    except Exception:
+        logger.exception("Error processing request")
+        # Hide internal errors from clients
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing request: {str(e)}"
+            detail="Internal server error"
         )
     finally:
         if conn:
@@ -163,28 +284,43 @@ async def get_stats():
     """
     Get statistics about indexed events and relays.
     """
+    # Return cached stats if enabled and unexpired
+    if settings.cache_enabled and "stats" in stats_cache:
+        return stats_cache["stats"]
+
     conn = None
     try:
         conn = storage.pool.getconn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-            # Get total events
-            cursor.execute("SELECT COUNT(*) as count FROM events")
-            total_events = cursor.fetchone()['count']
+            if settings.use_materialized_views:
+                # Read aggregated stats from materialized views
+                cursor.execute(
+                    "SELECT total_events, unique_pubkeys FROM mv_event_counts"
+                )
+                row = cursor.fetchone()
+                total_events = row['total_events']
+                unique_pubkeys = row['unique_pubkeys']
+                cursor.execute(
+                    "SELECT relay_url, event_count FROM mv_relay_stats ORDER BY event_count DESC"
+                )
+                relay_stats = cursor.fetchall()
+            else:
+                # Direct aggregation queries
+                cursor.execute("SELECT COUNT(*) as count FROM events")
+                total_events = cursor.fetchone()['count']
 
-            # Get unique pubkeys
-            cursor.execute("SELECT COUNT(DISTINCT pubkey) as count FROM events")
-            unique_pubkeys = cursor.fetchone()['count']
+                cursor.execute("SELECT COUNT(DISTINCT pubkey) as count FROM events")
+                unique_pubkeys = cursor.fetchone()['count']
 
-            # Get relay stats
-            cursor.execute("""
-                SELECT relay_url, COUNT(DISTINCT event_id) as event_count
-                FROM event_sources
-                GROUP BY relay_url
-                ORDER BY event_count DESC
-            """)
-            relay_stats = cursor.fetchall()
+                cursor.execute("""
+                    SELECT relay_url, COUNT(DISTINCT event_id) as event_count
+                    FROM event_sources
+                    GROUP BY relay_url
+                    ORDER BY event_count DESC
+                """)
+                relay_stats = cursor.fetchall()
 
-            return {
+            result = {
                 'status': 'success',
                 'stats': {
                     'total_events': total_events,
@@ -192,24 +328,29 @@ async def get_stats():
                     'relays': relay_stats
                 }
             }
+            if settings.cache_enabled:
+                stats_cache["stats"] = result
+            return result
 
-    except Exception as e:
-        logger.error(f"Error getting stats: {e}")
+    except Exception:
+        logger.exception("Error getting stats")
+        # Hide internal errors from clients
         raise HTTPException(
             status_code=500,
-            detail=f"Error getting stats: {str(e)}"
+            detail="Internal server error"
         )
     finally:
         if conn:
             storage.pool.putconn(conn)
 
-@app.get("/api/health", response_model=Dict[str, Any])
+@app.get("/health", response_model=Dict[str, Any])
 async def health_check():
     """
-    Basic health check endpoint
+    Basic health check endpoint (database connectivity).
     """
+    if not settings.health_enabled:
+        raise HTTPException(status_code=503, detail="Health checks disabled")
     try:
-        # Test database connection
         conn = storage.pool.getconn()
         storage.pool.putconn(conn)
         return {
@@ -230,6 +371,39 @@ def cleanup():
 
 # Add cleanup on exit
 atexit.register(cleanup)
+
+async def _refresh_materialized_views_loop():
+    """Background task to periodically refresh materialized views."""
+    while True:
+        await asyncio.sleep(settings.matview_refresh_interval_seconds)
+        conn = None
+        try:
+            conn = storage.pool.getconn()
+            with conn.cursor() as cursor:
+                cursor.execute("REFRESH MATERIALIZED VIEW mv_event_counts")
+                cursor.execute("REFRESH MATERIALIZED VIEW mv_relay_stats")
+                conn.commit()
+                logger.info("Refreshed materialized views")
+        except Exception as e:
+            logger.error(f"Error refreshing materialized views: {e}")
+        finally:
+            if conn:
+                storage.pool.putconn(conn)
+
+async def _config_hot_reload_loop():
+    """Watch the relay config file for changes and reload settings at runtime."""
+    path = settings.relay_config_path
+    directory = os.path.dirname(path) or "."
+    filename = os.path.basename(path)
+    async for changes in awatch(directory):
+        for _change_type, changed_path in changes:
+            if os.path.basename(changed_path) == filename:
+                await asyncio.sleep(settings.config_hot_reload_debounce_seconds)
+                try:
+                    reload_settings()
+                    logger.info(f"Reloaded configuration from {path}")
+                except Exception as e:
+                    logger.error(f"Error reloading configuration: {e}")
 
 if __name__ == '__main__':
     import uvicorn

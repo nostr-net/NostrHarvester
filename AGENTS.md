@@ -25,5 +25,12 @@ This repository contains a Nostr event indexer, FastAPI service, and simple web 
 
 - `tests/` - Pytest suite with basic placeholder tests.
 
-Other root files include `docker-compose.yml` for running services together, `schema.sql` with PostgreSQL schema, and `pyproject.toml` defining Python dependencies.
-
+## Project Guidelines
+- **Code Quality**: Follow PEP 8 style guide. Use type hints and docstrings.
+- **Testing**: Write tests for new features. Use pytest for unit tests.
+- **Documentation**: Update API docs and README with new features. Use OpenAPI for API specs.
+- **Docker**: Use Docker for development and deployment. Always use "docker compose".
+- **File**: Keep files small and focused. Use modules to organize code logically, less than 500 lines per file.
+- **Configuration**: Use environment variables for sensitive data. Centralize configuration management.
+- **Version Control**: Use Git for version control. Commit often with clear messages.
+- **Dependencies**: Use `requirements.txt` for Python dependencies. Keep it up to date.

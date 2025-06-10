@@ -33,7 +33,7 @@ Retrieve events with optional filtering.
 | not-until   | string | Exclude events created before this time |
 | not-kind    | number | Exclude events of this kind |
 | not-tag     | string | Exclude events by tag key:value pair (repeatable) |
-| limit       | number | Maximum number of events to return (default: 100, max: 1000) |
+| limit       | number | Maximum number of events to return (default: 500, maximum: value of `MAX_EVENT_QUERY_LIMIT` environment variable) |
 | offset      | number | Pagination offset (default: 0) |
 
 **Response:**
@@ -90,7 +90,7 @@ Get statistics about indexed events and relays.
 
 Check if the API server is running and the database is accessible.
 
-**Endpoint:** `GET /api/health`
+**Endpoint:** `GET /health`
 
 **Response:**
 
@@ -100,6 +100,14 @@ Check if the API server is running and the database is accessible.
   "message": "API server is running and database is accessible"
 }
 ```
+
+### 4. Metrics
+
+Expose Prometheus metrics for monitoring.
+
+**Endpoint:** `GET /metrics`
+
+Returns a text/plain payload with Prometheus-formatted metrics.
 
 ## Examples
 
@@ -164,6 +172,7 @@ def get_stats():
     response = requests.get(f"{base_url}/stats")
     return response.json()
 
+def check_health():
 # Check API health
 def check_health():
     response = requests.get(f"{base_url}/health")
