@@ -63,7 +63,7 @@ The application reads PostgreSQL connection details from environment variables. 
 - `REQUEST_MAX_SIZE_BYTES` – maximum request size in bytes for API requests (`0` to disable, default: `0`)
 - `MAX_QUERY_LENGTH` – maximum length of text search query `q` (default: `500`)
 - `API_AUTH_ENABLED` – require Bearer token authentication for all API endpoints (`true`/`false`, default: `false`)
-- `API_AUTH_TOKEN` – shared secret token for Bearer authentication when enabled (default: empty)
+- `API_AUTH_TOKEN` – shared secret token for Bearer authentication when enabled (must be non-empty if `API_AUTH_ENABLED` is `true`, default: empty)
 
 You can override them by editing `docker-compose.yml` or providing your own environment file.
 

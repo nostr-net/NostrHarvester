@@ -110,6 +110,15 @@ class Settings(BaseSettings):
                     values[k] = v
         return values
 
+    @root_validator()
+    def check_auth_token(cls, values):
+        """Ensure non-empty API_AUTH_TOKEN when authentication is enabled."""
+        if values.get("api_auth_enabled") and not values.get("api_auth_token"):
+            raise ValueError(
+                "API_AUTH_TOKEN must be set when API_AUTH_ENABLED is True"
+            )
+        return values
+
 
 settings = Settings()
 
