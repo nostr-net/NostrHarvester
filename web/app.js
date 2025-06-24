@@ -72,13 +72,20 @@ async function performSearch() {
     const resp = await fetch(url);
     const data = await resp.json();
     if (data.status === 'success') {
-      resultsEl.innerHTML = `<p>Found ${data.count} of ${data.total} events.</p>`;
+      const summaryP = document.createElement('p');
+      summaryP.textContent = `Found ${data.count} of ${data.total} events.`;
+      resultsEl.innerHTML = '';
+      resultsEl.appendChild(summaryP);
       data.events.forEach(ev => {
         const evDiv = document.createElement('div');
         evDiv.className = 'event';
 
         const idP = document.createElement('p');
-        idP.innerHTML = `<strong>id:</strong> <span class="ev-id">${ev.id}</span>`;
+        idP.innerHTML = '<strong>id:</strong> ';
+        const idSpan = document.createElement('span');
+        idSpan.className = 'ev-id';
+        idSpan.textContent = ev.id;
+        idP.appendChild(idSpan);
         const idBtn = document.createElement('button');
         idBtn.textContent = 'Copy';
         idBtn.className = 'copy-btn';
@@ -87,7 +94,11 @@ async function performSearch() {
         evDiv.appendChild(idP);
 
         const pkP = document.createElement('p');
-        pkP.innerHTML = `<strong>pubkey:</strong> <span class="ev-pubkey">${ev.pubkey}</span>`;
+        pkP.innerHTML = '<strong>pubkey:</strong> ';
+        const pkSpan = document.createElement('span');
+        pkSpan.className = 'ev-pubkey';
+        pkSpan.textContent = ev.pubkey;
+        pkP.appendChild(pkSpan);
         const pkBtn = document.createElement('button');
         pkBtn.textContent = 'Copy';
         pkBtn.className = 'copy-btn';
@@ -96,27 +107,42 @@ async function performSearch() {
         evDiv.appendChild(pkP);
 
         const contentP = document.createElement('p');
-        contentP.innerHTML = `<strong>content:</strong> ${ev.content}`;
+        contentP.innerHTML = '<strong>content:</strong> ';
+        const contentSpan = document.createElement('span');
+        contentSpan.textContent = ev.content;
+        contentP.appendChild(contentSpan);
         evDiv.appendChild(contentP);
 
         if (ev.tags && ev.tags.length) {
           const tagsP = document.createElement('p');
-          tagsP.innerHTML = `<strong>tags:</strong> ${ev.tags.map(t => t.join(':')).join(', ')}`;
+          tagsP.innerHTML = '<strong>tags:</strong> ';
+          const tagsSpan = document.createElement('span');
+          tagsSpan.textContent = ev.tags.map(t => t.join(':')).join(', ');
+          tagsP.appendChild(tagsSpan);
           evDiv.appendChild(tagsP);
         }
 
         if (ev.relays && ev.relays.length) {
           const relaysP = document.createElement('p');
-          relaysP.innerHTML = `<strong>relays:</strong> ${ev.relays.join(', ')}`;
+          relaysP.innerHTML = '<strong>relays:</strong> ';
+          const relaysSpan = document.createElement('span');
+          relaysSpan.textContent = ev.relays.join(', ');
+          relaysP.appendChild(relaysSpan);
           evDiv.appendChild(relaysP);
         }
 
         resultsEl.appendChild(evDiv);
       });
     } else {
-      resultsEl.innerHTML = `<p>Error: ${data.message || data.detail}</p>`;
+      const errP = document.createElement('p');
+      errP.textContent = `Error: ${data.message || data.detail}`;
+      resultsEl.innerHTML = '';
+      resultsEl.appendChild(errP);
     }
   } catch (err) {
-    resultsEl.innerHTML = `<p>Fetch error: ${err}</p>`;
+    const errP = document.createElement('p');
+    errP.textContent = `Fetch error: ${err}`;
+    resultsEl.innerHTML = '';
+    resultsEl.appendChild(errP);
   }
 }
