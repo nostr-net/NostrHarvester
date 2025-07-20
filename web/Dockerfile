@@ -11,9 +11,15 @@ COPY app.js /usr/share/nginx/html/
 # Add security headers and API proxy to nginx config
 RUN echo 'server { \
     listen 80; \
-    server_name _; \
+    server_name _ search.nostr.net localhost; \
     root /usr/share/nginx/html; \
     index index.html; \
+    \
+    # Handle SSL termination properly \
+    set $real_scheme $scheme; \
+    if ($http_x_forwarded_proto) { \
+        set $real_scheme $http_x_forwarded_proto; \
+    } \
     \
     # Security headers \
     add_header X-Frame-Options "SAMEORIGIN" always; \
@@ -27,7 +33,7 @@ RUN echo 'server { \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
-        proxy_set_header X-Forwarded-Proto $scheme; \
+        proxy_set_header X-Forwarded-Proto $real_scheme; \
         proxy_connect_timeout 30s; \
         proxy_send_timeout 30s; \
         proxy_read_timeout 30s; \
@@ -39,7 +45,7 @@ RUN echo 'server { \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
-        proxy_set_header X-Forwarded-Proto $scheme; \
+        proxy_set_header X-Forwarded-Proto $real_scheme; \
     } \
     \
     # Serve static files \

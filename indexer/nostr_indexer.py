@@ -16,21 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Prometheus metrics for indexer observability
-EVENTS_RECEIVED = Counter(
-    'events_received_total', 'Total number of events received and enqueued', ['relay_url']
-)
-NOTIFICATION_ERRORS = Counter(
-    'notification_errors_total', 'Total errors during notification handling'
-)
-RELAYS_CONFIGURED = Gauge(
-    'relays_configured', 'Number of relays configured'
-)
-DB_ACTIVE_CONNECTIONS = Gauge(
-    'db_active_connections', 'Number of active database connections'
-)
-DB_IDLE_CONNECTIONS = Gauge(
-    'db_idle_connections', 'Number of idle database connections'
+# Import shared Prometheus metrics
+from .metrics import (
+    EVENTS_RECEIVED,
+    EVENTS_PROCESSED,
+    EVENTS_FAILED,
+    NOTIFICATION_ERRORS,
+    RELAYS_CONFIGURED,
+    RELAYS_CONNECTED,
+    DB_ACTIVE_CONNECTIONS,
+    DB_IDLE_CONNECTIONS,
+    DB_OPERATIONS
 )
 
 

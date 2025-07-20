@@ -1,21 +1,16 @@
 import logging
 import asyncio
 from common.config import settings
-from prometheus_client import Counter, Gauge
+
+# Import shared Prometheus metrics
+from .metrics import (
+    EVENTS_QUEUED,
+    EVENTS_PROCESSED,
+    EVENT_PROCESSING_ERRORS,
+    EVENT_QUEUE_SIZE
+)
 
 logger = logging.getLogger(__name__)
-EVENTS_QUEUED = Counter(
-    'events_queued_total', 'Total number of events queued for processing'
-)
-EVENTS_PROCESSED = Counter(
-    'events_processed_total', 'Total number of events processed'
-)
-EVENT_PROCESSING_ERRORS = Counter(
-    'event_processing_errors_total', 'Total errors encountered during event processing'
-)
-EVENT_QUEUE_SIZE = Gauge(
-    'event_queue_size', 'Current size of the event processing queue'
-)
 
 class EventProcessor:
     def __init__(self, storage):

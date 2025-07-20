@@ -3,16 +3,10 @@ import json
 import logging
 
 from common.config import settings
-from prometheus_client import Counter
-
-# Metrics for event notifications
-EVENTS_RECEIVED = Counter(
-    'events_received_total', 'Total number of events received from relays', ['relay_url']
-)
-NOTIFICATION_ERRORS = Counter(
-    'notification_errors_total', 'Total errors encountered in notification handling'
-)
 from common.circuit_breaker import CircuitBreaker
+
+# Import shared Prometheus metrics
+from .metrics import EVENTS_RECEIVED, NOTIFICATION_ERRORS
 from nostr_sdk import Client, Filter, HandleNotification
 
 logger = logging.getLogger(__name__)
