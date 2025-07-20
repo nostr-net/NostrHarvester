@@ -65,7 +65,7 @@ async def startup():
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     # Skip authentication for public endpoints
-    public_endpoints = ["/health", "/metrics"]
+    public_endpoints = ["/health", "/metrics", "/api/events", "/api/stats"]
     
     # Also skip authentication for paths that browsers commonly request
     skip_auth_patterns = [
