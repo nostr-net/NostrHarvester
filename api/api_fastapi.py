@@ -17,7 +17,6 @@ import psycopg2
 import psycopg2.extras
 from cachetools import TTLCache
 import re
-from api.static_server import mount_static_files
 
 # Sanitization patterns for query parameters
 SAFE_QUERY_PATTERN = re.compile(r'^[\w\s\-\.\:]+$')
@@ -62,22 +61,11 @@ async def startup():
         asyncio.create_task(_config_hot_reload_loop())
 
 
-# Debug middleware to log requests when behind proxy
-@app.middleware("http")
-async def debug_proxy_middleware(request: Request, call_next):
-    # Log request details when X-Forwarded headers are present
-    if request.headers.get("x-forwarded-proto") or request.headers.get("x-forwarded-host"):
-        logger.info(f"Proxy request: {request.method} {request.url.path}")
-        logger.info(f"Host header: {request.headers.get('host')}")
-        logger.info(f"X-Forwarded-Proto: {request.headers.get('x-forwarded-proto')}")
-        logger.info(f"X-Forwarded-Host: {request.headers.get('x-forwarded-host')}")
-    return await call_next(request)
-
 # Security hardening: API authentication middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     # Skip authentication for public endpoints
-    public_endpoints = ["/health", "/metrics", "/favicon.ico", "/robots.txt", "/"]
+    public_endpoints = ["/health", "/metrics"]
     
     # Also skip authentication for paths that browsers commonly request
     skip_auth_patterns = [
@@ -458,22 +446,7 @@ async def health_check():
             detail="Service temporarily unavailable"
         )
 
-@app.get("/favicon.ico")
-async def favicon():
-    """
-    Return empty favicon to prevent 404 errors from browsers.
-    """
-    return Response(content="", media_type="image/x-icon")
 
-@app.get("/robots.txt")
-async def robots():
-    """
-    Basic robots.txt to prevent search engine crawling.
-    """
-    return Response(content="User-agent: *\nDisallow: /\n", media_type="text/plain")
-
-# Mount static files for web interface
-mount_static_files(app)
 
 @app.on_event("shutdown")
 def cleanup():
