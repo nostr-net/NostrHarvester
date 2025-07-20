@@ -25,7 +25,10 @@ SAFE_PUBKEY_PATTERN = re.compile(r'^[a-fA-F0-9]{64}$|^npub1[a-zA-Z0-9]+$')
 SAFE_RELAY_PATTERN = re.compile(r'^wss?://[a-zA-Z0-9\-\.]+(?::[0-9]+)?(?:/[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]*)?$')
 SAFE_TAG_PATTERN = re.compile(r'^[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]+:[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]*$')
 
-app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
+app = FastAPI(
+    title="Nostr Harvester API", 
+    description="API for querying Nostr events"
+)
 
 # Configure CORS with environment variable for allowed origins
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:8080,http://localhost:18080").split(",")
@@ -58,6 +61,17 @@ async def startup():
     if settings.config_hot_reload_enabled:
         asyncio.create_task(_config_hot_reload_loop())
 
+
+# Debug middleware to log requests when behind proxy
+@app.middleware("http")
+async def debug_proxy_middleware(request: Request, call_next):
+    # Log request details when X-Forwarded headers are present
+    if request.headers.get("x-forwarded-proto") or request.headers.get("x-forwarded-host"):
+        logger.info(f"Proxy request: {request.method} {request.url.path}")
+        logger.info(f"Host header: {request.headers.get('host')}")
+        logger.info(f"X-Forwarded-Proto: {request.headers.get('x-forwarded-proto')}")
+        logger.info(f"X-Forwarded-Host: {request.headers.get('x-forwarded-host')}")
+    return await call_next(request)
 
 # Security hardening: API authentication middleware
 @app.middleware("http")

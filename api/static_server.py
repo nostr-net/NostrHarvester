@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
@@ -10,11 +10,25 @@ def mount_static_files(app: FastAPI):
     # Serve index.html at root
     @app.get("/")
     async def serve_index():
-        return FileResponse(os.path.join(static_dir, "index.html"))
+        return FileResponse(
+            os.path.join(static_dir, "index.html"),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     
     # Serve app.js explicitly
     @app.get("/app.js")
     async def serve_app_js():
-        return FileResponse(os.path.join(static_dir, "app.js"))
+        return FileResponse(
+            os.path.join(static_dir, "app.js"),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     
     # Don't mount static files on "/" as it catches all routes including /api/*
