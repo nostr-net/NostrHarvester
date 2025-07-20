@@ -12,5 +12,9 @@ def mount_static_files(app: FastAPI):
     async def serve_index():
         return FileResponse(os.path.join(static_dir, "index.html"))
     
-    # Serve static files
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    # Serve app.js explicitly
+    @app.get("/app.js")
+    async def serve_app_js():
+        return FileResponse(os.path.join(static_dir, "app.js"))
+    
+    # Don't mount static files on "/" as it catches all routes including /api/*

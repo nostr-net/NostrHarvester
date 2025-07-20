@@ -63,9 +63,25 @@ async def startup():
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     # Skip authentication for public endpoints
-    public_endpoints = ["/health", "/metrics"]
-    if request.url.path in public_endpoints:
+    public_endpoints = ["/health", "/metrics", "/favicon.ico", "/robots.txt", "/"]
+    
+    # Also skip authentication for paths that browsers commonly request
+    skip_auth_patterns = [
+        "/.well-known/",  # Various browser/app checks
+        "/apple-touch-icon",  # iOS devices
+        "/browserconfig.xml",  # Windows tiles
+        "/sitemap.xml",  # Search engines
+    ]
+    
+    path = request.url.path
+    
+    if path in public_endpoints:
         return await call_next(request)
+    
+    # Check if path starts with any of the skip patterns
+    for pattern in skip_auth_patterns:
+        if path.startswith(pattern):
+            return await call_next(request)
     
     if not settings.api_auth_enabled:
         return await call_next(request)
@@ -427,6 +443,20 @@ async def health_check():
             status_code=503,
             detail="Service temporarily unavailable"
         )
+
+@app.get("/favicon.ico")
+async def favicon():
+    """
+    Return empty favicon to prevent 404 errors from browsers.
+    """
+    return Response(content="", media_type="image/x-icon")
+
+@app.get("/robots.txt")
+async def robots():
+    """
+    Basic robots.txt to prevent search engine crawling.
+    """
+    return Response(content="User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 # Mount static files for web interface
 mount_static_files(app)

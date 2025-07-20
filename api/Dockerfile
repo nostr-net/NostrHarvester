@@ -22,7 +22,7 @@ RUN chown -R apiuser:apiuser /app
 # Switch to non-root user
 USER apiuser
 
-# Start the API
-CMD ["uvicorn", "api.api_fastapi:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start the API with proxy headers support for SSL termination
+CMD ["uvicorn", "api.api_fastapi:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
 
 EXPOSE 8000

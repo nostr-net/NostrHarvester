@@ -15,6 +15,11 @@ http { \
     sendfile on; \
     keepalive_timeout 65; \
     \
+    map $http_x_forwarded_proto $proxy_x_forwarded_proto { \
+        default $http_x_forwarded_proto; \
+        '"'"''"'"' $scheme; \
+    } \
+    \
     server { \
         listen 80 default_server; \
         server_name _; \
@@ -29,17 +34,59 @@ http { \
         # Proxy API requests \
         location /api/ { \
             proxy_pass http://app:8000/api/; \
-            proxy_set_header Host $host; \
+            proxy_set_header Host $http_host; \
             proxy_set_header X-Real-IP $remote_addr; \
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto; \
+            proxy_set_header X-Forwarded-Host $http_host; \
+            proxy_redirect off; \
+            proxy_buffering off; \
+            proxy_request_buffering off; \
+            proxy_http_version 1.1; \
+            proxy_set_header Connection ""; \
         } \
         \
         # Proxy health endpoint \
         location /health { \
             proxy_pass http://app:8000/health; \
-            proxy_set_header Host $host; \
+            proxy_set_header Host $http_host; \
             proxy_set_header X-Real-IP $remote_addr; \
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto; \
+            proxy_set_header X-Forwarded-Host $http_host; \
+            proxy_redirect off; \
+        } \
+        \
+        # Proxy metrics endpoint \
+        location /metrics { \
+            proxy_pass http://app:8000/metrics; \
+            proxy_set_header Host $http_host; \
+            proxy_set_header X-Real-IP $remote_addr; \
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto; \
+            proxy_set_header X-Forwarded-Host $http_host; \
+            proxy_redirect off; \
+        } \
+        \
+        # Proxy favicon and robots.txt \
+        location /favicon.ico { \
+            proxy_pass http://app:8000/favicon.ico; \
+            proxy_set_header Host $http_host; \
+            proxy_set_header X-Real-IP $remote_addr; \
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto; \
+            proxy_set_header X-Forwarded-Host $http_host; \
+            proxy_redirect off; \
+        } \
+        \
+        location /robots.txt { \
+            proxy_pass http://app:8000/robots.txt; \
+            proxy_set_header Host $http_host; \
+            proxy_set_header X-Real-IP $remote_addr; \
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+            proxy_set_header X-Forwarded-Proto $proxy_x_forwarded_proto; \
+            proxy_set_header X-Forwarded-Host $http_host; \
+            proxy_redirect off; \
         } \
         \
         # Serve static files \
