@@ -35,6 +35,11 @@ services:
       - nostr_search_net
   db:
     image: postgres:15
+    environment:
+      # Map PG* variables to POSTGRES_* variables expected by container
+      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
     env_file:
       - .env
     volumes:
