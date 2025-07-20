@@ -61,6 +61,11 @@ async def startup():
 # Security hardening: API authentication middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # Skip authentication for public endpoints
+    public_endpoints = ["/health", "/metrics"]
+    if request.url.path in public_endpoints:
+        return await call_next(request)
+    
     if not settings.api_auth_enabled:
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")

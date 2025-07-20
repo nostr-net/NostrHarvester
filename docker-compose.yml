@@ -3,13 +3,13 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    ports:
-      - "8008:8000"
     depends_on:
       - migrate
       - db
     env_file:
       - .env
+    networks:
+      - nostr_search_net
   indexer:
     build:
       context: .
@@ -21,6 +21,8 @@ services:
       - ./indexer/config.json:/app/config.json
     env_file:
       - .env
+    networks:
+      - nostr_search_net
   web:
     build:
       context: ./web
@@ -29,6 +31,8 @@ services:
       - "18080:80"
     depends_on:
       - app
+    networks:
+      - nostr_search_net
   db:
     image: postgres:15
     env_file:
@@ -36,6 +40,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     command: ["postgres", "-c", "log_min_messages=${DB_LOG_LEVEL:-warning}", "-c", "log_statement=${DB_LOG_STATEMENT:-none}"]
+    networks:
+      - nostr_search_net
   migrate:
     build:
       context: .
@@ -45,5 +51,12 @@ services:
     env_file:
       - .env
     command: ["python", "migrate.py"]
+    networks:
+      - nostr_search_net
+
+networks:
+  nostr_search_net:
+    driver: bridge
+
 volumes:
   postgres_data:
