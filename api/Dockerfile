@@ -14,6 +14,7 @@ COPY api/ ./api/
 COPY common/ ./common/
 COPY migrations/ ./migrations/
 COPY migrate.py ./
+COPY web/ ./web/
 
 # Change ownership to non-root user
 RUN chown -R apiuser:apiuser /app

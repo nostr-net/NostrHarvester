@@ -1,4 +1,4 @@
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:${window.location.port}/api/events`;
+const API_BASE = '/api/events';
 
 const inputEl = document.getElementById('searchInput');
 const buttonEl = document.getElementById('searchButton');

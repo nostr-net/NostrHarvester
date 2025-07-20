@@ -8,6 +8,8 @@ services:
       - db
     env_file:
       - .env
+    ports:
+      - "18080:8000"
     networks:
       - nostr_search_net
   indexer:
@@ -21,16 +23,6 @@ services:
       - ./indexer/config.json:/app/config.json
     env_file:
       - .env
-    networks:
-      - nostr_search_net
-  web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    ports:
-      - "18080:80"
-    depends_on:
-      - app
     networks:
       - nostr_search_net
   db:

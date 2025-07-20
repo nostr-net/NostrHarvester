@@ -17,6 +17,7 @@ import psycopg2
 import psycopg2.extras
 from cachetools import TTLCache
 import re
+from api.static_server import mount_static_files
 
 # Sanitization patterns for query parameters
 SAFE_QUERY_PATTERN = re.compile(r'^[\w\s\-\.\:]+$')
@@ -426,6 +427,9 @@ async def health_check():
             status_code=503,
             detail="Service temporarily unavailable"
         )
+
+# Mount static files for web interface
+mount_static_files(app)
 
 @app.on_event("shutdown")
 def cleanup():
