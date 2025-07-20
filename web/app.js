@@ -106,6 +106,18 @@ async function performSearch() {
         pkP.appendChild(pkBtn);
         evDiv.appendChild(pkP);
 
+        const kindP = document.createElement('p');
+        kindP.innerHTML = '<strong>kind:</strong> ';
+        const kindSpan = document.createElement('span');
+        kindSpan.textContent = ev.kind;
+        kindP.appendChild(kindSpan);
+        const kindBtn = document.createElement('button');
+        kindBtn.textContent = 'Copy';
+        kindBtn.className = 'copy-btn';
+        kindBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.kind));
+        kindP.appendChild(kindBtn);
+        evDiv.appendChild(kindP);
+
         const contentP = document.createElement('p');
         contentP.innerHTML = '<strong>content:</strong> ';
         const contentSpan = document.createElement('span');
@@ -130,6 +142,16 @@ async function performSearch() {
           relaysP.appendChild(relaysSpan);
           evDiv.appendChild(relaysP);
         }
+
+        // Add Copy JSON button at the bottom
+        const copyJsonBtn = document.createElement('button');
+        copyJsonBtn.textContent = 'Copy event json';
+        copyJsonBtn.className = 'copy-json-btn';
+        copyJsonBtn.addEventListener('click', () => {
+          const jsonString = JSON.stringify(ev, null, 2);
+          navigator.clipboard.writeText(jsonString);
+        });
+        evDiv.appendChild(copyJsonBtn);
 
         resultsEl.appendChild(evDiv);
       });

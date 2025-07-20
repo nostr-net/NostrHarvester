@@ -18,16 +18,21 @@ import psycopg2.extras
 from cachetools import TTLCache
 import re
 
-# Sanitization pattern for query parameter 'q'
+# Sanitization patterns for query parameters
 SAFE_QUERY_PATTERN = re.compile(r'^[\w\s\-\.\:]+$')
+SAFE_PUBKEY_PATTERN = re.compile(r'^[a-fA-F0-9]{64}$|^npub1[a-zA-Z0-9]+$')
+SAFE_RELAY_PATTERN = re.compile(r'^wss?://[a-zA-Z0-9\-\.]+(?::[0-9]+)?(?:/[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]*)?$')
+SAFE_TAG_PATTERN = re.compile(r'^[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]+:[a-zA-Z0-9\-\._~:/?#[\]@!$&\'()*+,;=]*$')
 
 app = FastAPI(title="Nostr Harvester API", description="API for querying Nostr events")
 
+# Configure CORS with environment variable for allowed origins
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:8080,http://localhost:18080").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 logging.basicConfig(level=settings.log_level)
@@ -187,6 +192,59 @@ async def get_events(
                 status_code=400,
                 detail="Invalid characters in exclusion query parameter 'not-q'"
             )
+    
+    # Validate pubkey format
+    if pubkey is not None and not SAFE_PUBKEY_PATTERN.match(pubkey):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid pubkey format. Must be 64-character hex or npub format."
+        )
+    if not_pubkey is not None and not SAFE_PUBKEY_PATTERN.match(not_pubkey):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid not-pubkey format. Must be 64-character hex or npub format."
+        )
+    
+    # Validate relay URL format
+    if relay is not None and not SAFE_RELAY_PATTERN.match(relay):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid relay URL format."
+        )
+    if not_relay is not None and not SAFE_RELAY_PATTERN.match(not_relay):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid not-relay URL format."
+        )
+    
+    # Validate tag format
+    if tags:
+        for tag in tags:
+            if not SAFE_TAG_PATTERN.match(tag):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid tag format: {tag}. Must be in key:value format with safe characters."
+                )
+    if not_tags:
+        for tag in not_tags:
+            if not SAFE_TAG_PATTERN.match(tag):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid not-tag format: {tag}. Must be in key:value format with safe characters."
+                )
+    
+    # Validate kind parameter ranges
+    if kind is not None and (kind < 0 or kind > 65535):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid kind value. Must be between 0 and 65535."
+        )
+    if not_kind is not None and (not_kind < 0 or not_kind > 65535):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid not-kind value. Must be between 0 and 65535."
+        )
+    
     conn = None
     try:
         # Normalize pubkey if provided
@@ -358,9 +416,10 @@ async def health_check():
             'message': 'API server is running and database is accessible'
         }
     except Exception as e:
+        logger.exception("Database connection error")
         raise HTTPException(
-            status_code=500,
-            detail=f"Database connection error: {str(e)}"
+            status_code=503,
+            detail="Service temporarily unavailable"
         )
 
 @app.on_event("shutdown")

@@ -26,7 +26,7 @@ services:
       context: ./web
       dockerfile: Dockerfile
     ports:
-      - "8080:80"
+      - "18080:80"
     depends_on:
       - app
   db:

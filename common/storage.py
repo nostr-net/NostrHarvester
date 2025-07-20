@@ -4,7 +4,7 @@ import logging
 import asyncio
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 from .utils import pubkey_to_bech32
 from .config import settings
 
@@ -351,12 +351,12 @@ class Storage:
                         )
                         for e in events
                     ]
-                    args_str = ",".join(
-                        cursor.mogrify("(%s,%s,%s,%s,%s,%s,%s)", v).decode() for v in values
-                    )
-                    cursor.execute(
-                        f"INSERT INTO events (id, pubkey, created_at, kind, content, sig, raw_data) "
-                        f"VALUES {args_str} ON CONFLICT (id) DO NOTHING"
+                    execute_values(
+                        cursor,
+                        "INSERT INTO events (id, pubkey, created_at, kind, content, sig, raw_data) VALUES %s ON CONFLICT (id) DO NOTHING",
+                        values,
+                        template=None,
+                        page_size=100
                     )
                 conn.commit()
             finally:
@@ -380,24 +380,36 @@ class Storage:
                         if rt and rt < 0:
                             rt = 0
                         values.append((event_id, relay_url, current_time, rt))
-                    args_str = ",".join(
-                        cursor.mogrify("(%s,%s,%s,%s)", v).decode() for v in values
+                    
+                    # Use a temp table approach for the complex query with EXISTS check
+                    cursor.execute("""
+                        CREATE TEMP TABLE temp_event_sources (
+                            event_id VARCHAR(64),
+                            relay_url TEXT,
+                            first_seen_at BIGINT,
+                            response_time_ms INTEGER
+                        )
+                    """)
+                    
+                    execute_values(
+                        cursor,
+                        "INSERT INTO temp_event_sources (event_id, relay_url, first_seen_at, response_time_ms) VALUES %s",
+                        values,
+                        template=None,
+                        page_size=100
                     )
-                    cursor.execute(
-                        f"""
-                        INSERT INTO event_sources (
-                            event_id, relay_url, first_seen_at, response_time_ms
-                        )
+                    
+                    cursor.execute("""
+                        INSERT INTO event_sources (event_id, relay_url, first_seen_at, response_time_ms)
                         SELECT t.event_id, t.relay_url, t.first_seen_at, t.response_time_ms
-                        FROM (VALUES {args_str}) AS t(
-                            event_id, relay_url, first_seen_at, response_time_ms
-                        )
+                        FROM temp_event_sources t
                         WHERE EXISTS (
                             SELECT 1 FROM events e WHERE e.id = t.event_id
                         )
                         ON CONFLICT (event_id, relay_url) DO NOTHING
-                        """
-                    )
+                    """)
+                    
+                    cursor.execute("DROP TABLE temp_event_sources")
                 conn.commit()
             finally:
                 self.pool.putconn(conn)

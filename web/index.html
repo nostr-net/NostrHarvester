@@ -68,21 +68,48 @@
       max-width: 800px;
       margin: 20px auto;
     }
-    .event { 
+    .event {
       border-bottom: 1px solid #ddd;
       padding: 15px;
       background: white;
       margin-bottom: 10px;
       border-radius: 4px;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
-    .copy-btn { 
+    .ev-id, .ev-pubkey {
+      word-break: break-all;
+      overflow-wrap: break-word;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .copy-btn {
       margin-left: 5px;
       padding: 4px 8px;
       font-size: 12px;
       cursor: pointer;
-      background: #eee;
-      border: 1px solid #ddd;
+      background: #007bff;
+      color: white;
+      border: none;
       border-radius: 3px;
+      transition: background-color 0.2s;
+    }
+    .copy-btn:hover {
+      background: #0056b3;
+    }
+    .copy-json-btn {
+      margin-top: 15px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      transition: background-color 0.2s;
+    }
+    .copy-json-btn:hover {
+      background: #0056b3;
     }
     pre { 
       white-space: pre-wrap;
