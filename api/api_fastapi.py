@@ -64,67 +64,117 @@ async def startup():
 # Security hardening: API authentication middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Skip authentication for public endpoints
-    public_endpoints = ["/health", "/metrics", "/api/events", "/api/stats"]
-    
-    # Also skip authentication for paths that browsers commonly request
-    skip_auth_patterns = [
-        "/.well-known/",  # Various browser/app checks
-        "/apple-touch-icon",  # iOS devices
-        "/browserconfig.xml",  # Windows tiles
-        "/sitemap.xml",  # Search engines
-    ]
-    
-    path = request.url.path
-    
-    if path in public_endpoints:
-        return await call_next(request)
-    
-    # Check if path starts with any of the skip patterns
-    for pattern in skip_auth_patterns:
-        if path.startswith(pattern):
+    try:
+        # Skip authentication for public endpoints
+        public_endpoints = ["/health", "/metrics", "/api/events", "/api/stats"]
+        
+        # Also skip authentication for paths that browsers commonly request
+        skip_auth_patterns = [
+            "/.well-known/",  # Various browser/app checks
+            "/apple-touch-icon",  # iOS devices
+            "/browserconfig.xml",  # Windows tiles
+            "/sitemap.xml",  # Search engines
+        ]
+        
+        path = request.url.path
+        
+        if path in public_endpoints:
             return await call_next(request)
-    
-    if not settings.api_auth_enabled:
+        
+        # Check if path starts with any of the skip patterns
+        for pattern in skip_auth_patterns:
+            if path.startswith(pattern):
+                return await call_next(request)
+        
+        if not settings.api_auth_enabled:
+            return await call_next(request)
+        
+        auth_header = request.headers.get("Authorization", "")
+        token = settings.api_auth_token
+        
+        # Expect header in form 'Bearer <token>'
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        
+        provided = auth_header[len("Bearer "):].strip()
+        
+        # Constant-time comparison to mitigate timing attacks
+        if not hmac.compare_digest(provided, token):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        
         return await call_next(request)
-    auth_header = request.headers.get("Authorization", "")
-    token = settings.api_auth_token
-    # Expect header in form 'Bearer <token>'
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    provided = auth_header[len("Bearer "):].strip()
-    # Constant-time comparison to mitigate timing attacks
-    if not hmac.compare_digest(provided, token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return await call_next(request)
+    
+    except HTTPException:
+        # Re-raise HTTPExceptions to be handled by the exception handler
+        raise
+    except Exception as e:
+        # Log unexpected errors in auth middleware
+        logger.exception(f"Unexpected error in auth middleware: {e}")
+        raise HTTPException(status_code=500, detail="Authentication error")
 
 
 # Security hardening: request size limiting middleware
 @app.middleware("http")
 async def request_size_limit_middleware(request: Request, call_next):
-    max_bytes = settings.request_max_size_bytes
-    if max_bytes > 0:
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > max_bytes:
-            raise HTTPException(status_code=413, detail="Request body too large")
-    return await call_next(request)
+    try:
+        max_bytes = settings.request_max_size_bytes
+        if max_bytes > 0:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    content_length_int = int(content_length)
+                    if content_length_int > max_bytes:
+                        raise HTTPException(status_code=413, detail="Request body too large")
+                except ValueError:
+                    # Invalid content-length header
+                    logger.warning(f"Invalid content-length header: {content_length}")
+                    raise HTTPException(status_code=400, detail="Invalid content-length header")
+        
+        return await call_next(request)
+    
+    except HTTPException:
+        # Re-raise HTTPExceptions to be handled by the exception handler
+        raise
+    except Exception as e:
+        # Log unexpected errors in size limit middleware
+        logger.exception(f"Unexpected error in request size middleware: {e}")
+        raise HTTPException(status_code=500, detail="Request processing error")
 
 
 # Rate limiting middleware
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    if not settings.rate_limit_enabled:
+    try:
+        if not settings.rate_limit_enabled:
+            return await call_next(request)
+        
+        # Get client IP, handle cases where client info might not be available
+        ip = request.client.host if request.client else "unknown"
+        if not ip or ip == "unknown":
+            # If we can't identify the client, allow the request but log it
+            logger.warning("Rate limiting: Unable to identify client IP")
+            return await call_next(request)
+        
+        now = time.time()
+        window_start = now - 60
+        timestamps = ip_request_log.get(ip, [])
+        timestamps = [t for t in timestamps if t > window_start]
+        timestamps.append(now)
+        ip_request_log[ip] = timestamps
+        
+        if len(timestamps) > settings.rate_limit_requests_per_minute:
+            raise HTTPException(status_code=429, detail="Too many requests")
+        
         return await call_next(request)
-    ip = request.client.host
-    now = time.time()
-    window_start = now - 60
-    timestamps = ip_request_log.get(ip, [])
-    timestamps = [t for t in timestamps if t > window_start]
-    timestamps.append(now)
-    ip_request_log[ip] = timestamps
-    if len(timestamps) > settings.rate_limit_requests_per_minute:
-        raise HTTPException(status_code=429, detail="Too many requests")
-    return await call_next(request)
+    
+    except HTTPException:
+        # Re-raise HTTPExceptions to be handled by the exception handler
+        raise
+    except Exception as e:
+        # Log unexpected errors in rate limiting middleware
+        logger.exception(f"Unexpected error in rate limiting middleware: {e}")
+        # Continue processing if rate limiting fails, but log the error
+        return await call_next(request)
 
 # Prometheus metrics definitions and middleware
 REQUEST_COUNT = Counter(
@@ -138,12 +188,69 @@ REQUEST_LATENCY = Histogram(
 async def metrics_middleware(request: Request, call_next):
     if not settings.metrics_enabled:
         return await call_next(request)
+    
     start_time = time.time()
-    response = await call_next(request)
-    resp_time = time.time() - start_time
-    REQUEST_LATENCY.labels(request.method, request.url.path).observe(resp_time)
-    REQUEST_COUNT.labels(request.method, request.url.path, response.status_code).inc()
-    return response
+    response = None
+    
+    try:
+        response = await call_next(request)
+        resp_time = time.time() - start_time
+        
+        # Record metrics with error handling
+        try:
+            REQUEST_LATENCY.labels(request.method, request.url.path).observe(resp_time)
+            REQUEST_COUNT.labels(request.method, request.url.path, response.status_code).inc()
+        except Exception as e:
+            # Log metrics errors but don't fail the request
+            logger.warning(f"Error recording metrics: {e}")
+        
+        return response
+    
+    except Exception as e:
+        # If an error occurred, still try to record metrics
+        resp_time = time.time() - start_time
+        try:
+            REQUEST_LATENCY.labels(request.method, request.url.path).observe(resp_time)
+            REQUEST_COUNT.labels(request.method, request.url.path, "500").inc()
+        except Exception as metrics_error:
+            logger.warning(f"Error recording metrics for failed request: {metrics_error}")
+        
+        # Re-raise the original exception
+        raise
+
+# Global exception handlers for better error handling
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPException properly and log security events"""
+    
+    # Log security-related events without exposing sensitive details
+    if exc.status_code == 401:
+        logger.warning(f"Unauthorized access attempt from {request.client.host if request.client else 'unknown'} to {request.url.path}")
+    elif exc.status_code == 403:
+        logger.warning(f"Forbidden access attempt from {request.client.host if request.client else 'unknown'} to {request.url.path}")
+    elif exc.status_code == 413:
+        logger.warning(f"Request too large from {request.client.host if request.client else 'unknown'}: {request.headers.get('content-length', 'unknown')} bytes")
+    elif exc.status_code == 429:
+        logger.warning(f"Rate limit exceeded for {request.client.host if request.client else 'unknown'}")
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "error": "client_error"}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unexpected exceptions gracefully"""
+    logger.exception(f"Unhandled exception in {request.method} {request.url.path}")
+    
+    # Return generic error message to prevent information disclosure
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error", 
+            "error": "server_error"
+        }
+    )
 
 @app.get("/metrics")
 async def metrics_endpoint():

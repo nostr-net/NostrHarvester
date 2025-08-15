@@ -10,6 +10,50 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
+def sanitize_for_postgres(value):
+    """
+    Sanitize string data to remove null bytes that PostgreSQL cannot handle.
+    
+    Args:
+        value: Any value that might contain null bytes
+        
+    Returns:
+        Sanitized value safe for PostgreSQL insertion
+    """
+    if isinstance(value, str):
+        # Remove null bytes and other problematic control characters
+        return value.replace('\x00', '').replace('\x01', '').replace('\x02', '')
+    elif isinstance(value, dict):
+        # Recursively sanitize dictionary values
+        return {k: sanitize_for_postgres(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        # Recursively sanitize list items
+        return [sanitize_for_postgres(item) for item in value]
+    elif value is None:
+        return None
+    else:
+        # For other types (int, bool, etc.), return as-is
+        return value
+
+def sanitize_event(event):
+    """
+    Sanitize a Nostr event to remove null bytes from all string fields.
+    
+    Args:
+        event (dict): The Nostr event dictionary
+        
+    Returns:
+        dict: Sanitized event safe for PostgreSQL storage
+    """
+    if not isinstance(event, dict):
+        return event
+        
+    sanitized = {}
+    for key, value in event.items():
+        sanitized[key] = sanitize_for_postgres(value)
+    
+    return sanitized
+
 class Storage:
     def __init__(self):
         self.lock = asyncio.Lock()
@@ -105,8 +149,11 @@ class Storage:
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cursor:
+                    # Sanitize the event before processing
+                    sanitized_event = sanitize_event(event)
+                    
                     # Ensure created_at is within valid range for BIGINT
-                    created_at = event.get('created_at', 0)
+                    created_at = sanitized_event.get('created_at', 0)
                     if not isinstance(created_at, int) or created_at < 0:
                         logger.warning(f"Invalid created_at value: {created_at}, using 0 instead")
                         created_at = 0
@@ -117,19 +164,19 @@ class Storage:
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                     """, (
-                        event.get('id'),
-                        event.get('pubkey'),
+                        sanitize_for_postgres(sanitized_event.get('id')),
+                        sanitize_for_postgres(sanitized_event.get('pubkey')),
                         created_at,
-                        event.get('kind'),
-                        event.get('content'),
-                        event.get('sig'),
-                        json.dumps(event)
+                        sanitized_event.get('kind'),
+                        sanitize_for_postgres(sanitized_event.get('content')),
+                        sanitize_for_postgres(sanitized_event.get('sig')),
+                        json.dumps(sanitized_event)
                     ))
                     if cursor.rowcount > 0:
-                        logger.debug(f"Stored new event {event.get('id')}")
+                        logger.debug(f"Stored new sanitized event {sanitized_event.get('id')}")
                 conn.commit()
             except Exception as e:
-                logger.error(f"Error storing event {event.get('id')}: {e}")
+                logger.error(f"Error storing event {event.get('id') if event else 'unknown'}: {e}")
                 conn.rollback()
                 raise
             finally:
@@ -339,18 +386,26 @@ class Storage:
             conn = self.pool.getconn()
             try:
                 with conn.cursor() as cursor:
-                    values = [
-                        (
-                            e.get('id'),
-                            e.get('pubkey'),
-                            e.get('created_at', 0) if isinstance(e.get('created_at', 0), int) and e.get('created_at', 0) >= 0 else 0,
+                    # Sanitize all events before processing
+                    sanitized_events = [sanitize_event(e) for e in events]
+                    
+                    values = []
+                    for e in sanitized_events:
+                        # Ensure created_at is valid
+                        created_at = e.get('created_at', 0)
+                        if not isinstance(created_at, int) or created_at < 0:
+                            created_at = 0
+                        
+                        values.append((
+                            sanitize_for_postgres(e.get('id')),
+                            sanitize_for_postgres(e.get('pubkey')),
+                            created_at,
                             e.get('kind'),
-                            e.get('content'),
-                            e.get('sig'),
-                            json.dumps(e),
-                        )
-                        for e in events
-                    ]
+                            sanitize_for_postgres(e.get('content')),
+                            sanitize_for_postgres(e.get('sig')),
+                            json.dumps(e),  # e is already sanitized
+                        ))
+                    
                     execute_values(
                         cursor,
                         "INSERT INTO events (id, pubkey, created_at, kind, content, sig, raw_data) VALUES %s ON CONFLICT (id) DO NOTHING",
@@ -359,6 +414,11 @@ class Storage:
                         page_size=100
                     )
                 conn.commit()
+                logger.debug(f"Successfully stored {len(sanitized_events)} sanitized events")
+            except Exception as e:
+                logger.error(f"Error storing events: {e}")
+                conn.rollback()
+                raise
             finally:
                 self.pool.putconn(conn)
 
