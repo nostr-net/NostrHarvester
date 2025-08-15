@@ -26,6 +26,167 @@ document.addEventListener('DOMContentLoaded', () => {
   loadFromURL();
 });
 
+// Configure marked for safe markdown rendering
+if (typeof marked !== 'undefined') {
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+    sanitize: false, // We'll do our own sanitization
+    smartLists: true,
+    smartypants: true
+  });
+}
+
+// Render markdown content safely
+function renderMarkdown(content) {
+  if (!content || typeof marked === 'undefined') {
+    return escapeHtml(content || '');
+  }
+  
+  try {
+    // Basic sanitization - remove potentially dangerous elements
+    const sanitized = content
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+      .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+      .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, '');
+    
+    return marked.parse(sanitized);
+  } catch (e) {
+    console.warn('Markdown parsing failed:', e);
+    return escapeHtml(content);
+  }
+}
+
+// HTML escape function
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Parse kind 6 repost content
+function parseRepost(event) {
+  try {
+    // Try to parse the content as JSON (original event)
+    const originalEvent = JSON.parse(event.content);
+    if (originalEvent && originalEvent.id && originalEvent.content !== undefined) {
+      return originalEvent;
+    }
+  } catch (e) {
+    // If parsing fails, look for event reference in tags
+    const eTags = event.raw_data?.tags?.filter(tag => tag[0] === 'e') || [];
+    if (eTags.length > 0) {
+      // Return a placeholder for the referenced event
+      return {
+        id: eTags[0][1],
+        content: event.content || '(Original event not embedded)',
+        kind: 1, // Assume kind 1
+        pubkey: event.raw_data?.tags?.find(tag => tag[0] === 'p')?.[1] || 'unknown',
+        created_at: event.created_at
+      };
+    }
+  }
+  
+  // Fallback - treat as regular event
+  return null;
+}
+
+// Get user-friendly display for pubkey
+function formatPubkey(pubkey) {
+  if (!pubkey || pubkey === 'unknown') return 'unknown user';
+  return pubkey.slice(0, 8) + '...' + pubkey.slice(-8);
+}
+
+// Render event details (used for both regular events and original events in reposts)
+function renderEventDetails(container, ev, isOriginal = false) {
+  if (!isOriginal) {
+    // Event ID
+    const idP = document.createElement('p');
+    idP.innerHTML = '<strong>id:</strong> ';
+    const idSpan = document.createElement('span');
+    idSpan.className = 'ev-id';
+    idSpan.textContent = ev.id;
+    idP.appendChild(idSpan);
+    const idBtn = document.createElement('button');
+    idBtn.textContent = 'Copy';
+    idBtn.className = 'copy-btn';
+    idBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.id));
+    idP.appendChild(idBtn);
+    container.appendChild(idP);
+  }
+
+  // Pubkey
+  const pkP = document.createElement('p');
+  pkP.innerHTML = '<strong>pubkey:</strong> ';
+  const pkSpan = document.createElement('span');
+  pkSpan.className = 'ev-pubkey';
+  pkSpan.textContent = ev.pubkey;
+  pkP.appendChild(pkSpan);
+  const pkBtn = document.createElement('button');
+  pkBtn.textContent = 'Copy';
+  pkBtn.className = 'copy-btn';
+  pkBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.pubkey));
+  pkP.appendChild(pkBtn);
+  container.appendChild(pkP);
+
+  // Kind (only show if not original event in repost, or if not kind 1)
+  if (!isOriginal || ev.kind !== 1) {
+    const kindP = document.createElement('p');
+    kindP.innerHTML = '<strong>kind:</strong> ';
+    const kindSpan = document.createElement('span');
+    kindSpan.textContent = ev.kind;
+    kindP.appendChild(kindSpan);
+    const kindBtn = document.createElement('button');
+    kindBtn.textContent = 'Copy';
+    kindBtn.className = 'copy-btn';
+    kindBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.kind));
+    kindP.appendChild(kindBtn);
+    container.appendChild(kindP);
+  }
+
+  // Content with markdown rendering
+  if (ev.content) {
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'event-content';
+    contentDiv.innerHTML = renderMarkdown(ev.content);
+    container.appendChild(contentDiv);
+  }
+}
+
+// Add event metadata (tags, relays, etc.)
+function addEventMetadata(container, ev) {
+  // Tags
+  if (ev.raw_data?.tags && ev.raw_data.tags.length) {
+    const tagsP = document.createElement('p');
+    tagsP.innerHTML = '<strong>tags:</strong> ';
+    const tagsSpan = document.createElement('span');
+    tagsSpan.textContent = ev.raw_data.tags.map(t => t.join(':')).join(', ');
+    tagsP.appendChild(tagsSpan);
+    container.appendChild(tagsP);
+  }
+
+  // Relays
+  if (ev.relays && ev.relays.length) {
+    const relaysP = document.createElement('p');
+    relaysP.innerHTML = '<strong>relays:</strong> ';
+    const relaysSpan = document.createElement('span');
+    relaysSpan.textContent = ev.relays.join(', ');
+    relaysP.appendChild(relaysSpan);
+    container.appendChild(relaysP);
+  }
+
+  // Copy JSON button
+  const copyJsonBtn = document.createElement('button');
+  copyJsonBtn.textContent = 'Copy event json';
+  copyJsonBtn.className = 'copy-json-btn';
+  copyJsonBtn.addEventListener('click', () => {
+    const jsonString = JSON.stringify(ev, null, 2);
+    navigator.clipboard.writeText(jsonString);
+  });
+  container.appendChild(copyJsonBtn);
+}
+
 // Convert URL parameters to search query string
 function urlParamsToQuery(params) {
   const tokens = [];
@@ -147,80 +308,37 @@ async function performSearchInternal(updateUrl = true) {
       resultsEl.appendChild(summaryP);
       data.events.forEach(ev => {
         const evDiv = document.createElement('div');
-        evDiv.className = 'event';
+        evDiv.className = `event${ev.kind === 6 ? ' kind-6' : ''}`;
 
-        const idP = document.createElement('p');
-        idP.innerHTML = '<strong>id:</strong> ';
-        const idSpan = document.createElement('span');
-        idSpan.className = 'ev-id';
-        idSpan.textContent = ev.id;
-        idP.appendChild(idSpan);
-        const idBtn = document.createElement('button');
-        idBtn.textContent = 'Copy';
-        idBtn.className = 'copy-btn';
-        idBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.id));
-        idP.appendChild(idBtn);
-        evDiv.appendChild(idP);
+        // Handle kind 6 reposts specially
+        if (ev.kind === 6) {
+          const originalEvent = parseRepost(ev);
+          if (originalEvent) {
+            // Repost header
+            const repostHeader = document.createElement('div');
+            repostHeader.className = 'repost-header';
+            repostHeader.innerHTML = `🔄 Repost by ${formatPubkey(ev.pubkey)}`;
+            evDiv.appendChild(repostHeader);
 
-        const pkP = document.createElement('p');
-        pkP.innerHTML = '<strong>pubkey:</strong> ';
-        const pkSpan = document.createElement('span');
-        pkSpan.className = 'ev-pubkey';
-        pkSpan.textContent = ev.pubkey;
-        pkP.appendChild(pkSpan);
-        const pkBtn = document.createElement('button');
-        pkBtn.textContent = 'Copy';
-        pkBtn.className = 'copy-btn';
-        pkBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.pubkey));
-        pkP.appendChild(pkBtn);
-        evDiv.appendChild(pkP);
+            // Original event container
+            const originalDiv = document.createElement('div');
+            originalDiv.className = 'original-event';
+            
+            renderEventDetails(originalDiv, originalEvent, true);
+            evDiv.appendChild(originalDiv);
 
-        const kindP = document.createElement('p');
-        kindP.innerHTML = '<strong>kind:</strong> ';
-        const kindSpan = document.createElement('span');
-        kindSpan.textContent = ev.kind;
-        kindP.appendChild(kindSpan);
-        const kindBtn = document.createElement('button');
-        kindBtn.textContent = 'Copy';
-        kindBtn.className = 'copy-btn';
-        kindBtn.addEventListener('click', () => navigator.clipboard.writeText(ev.kind));
-        kindP.appendChild(kindBtn);
-        evDiv.appendChild(kindP);
-
-        const contentP = document.createElement('p');
-        contentP.innerHTML = '<strong>content:</strong> ';
-        const contentSpan = document.createElement('span');
-        contentSpan.textContent = ev.content;
-        contentP.appendChild(contentSpan);
-        evDiv.appendChild(contentP);
-
-        if (ev.tags && ev.tags.length) {
-          const tagsP = document.createElement('p');
-          tagsP.innerHTML = '<strong>tags:</strong> ';
-          const tagsSpan = document.createElement('span');
-          tagsSpan.textContent = ev.tags.map(t => t.join(':')).join(', ');
-          tagsP.appendChild(tagsSpan);
-          evDiv.appendChild(tagsP);
+            // Add repost metadata
+            addEventMetadata(evDiv, ev);
+          } else {
+            // Fallback to regular display if can't parse repost
+            renderEventDetails(evDiv, ev, false);
+            addEventMetadata(evDiv, ev);
+          }
+        } else {
+          // Regular event display
+          renderEventDetails(evDiv, ev, false);
+          addEventMetadata(evDiv, ev);
         }
-
-        if (ev.relays && ev.relays.length) {
-          const relaysP = document.createElement('p');
-          relaysP.innerHTML = '<strong>relays:</strong> ';
-          const relaysSpan = document.createElement('span');
-          relaysSpan.textContent = ev.relays.join(', ');
-          relaysP.appendChild(relaysSpan);
-          evDiv.appendChild(relaysP);
-        }
-
-        // Add Copy JSON button at the bottom
-        const copyJsonBtn = document.createElement('button');
-        copyJsonBtn.textContent = 'Copy event json';
-        copyJsonBtn.className = 'copy-json-btn';
-        copyJsonBtn.addEventListener('click', () => {
-          const jsonString = JSON.stringify(ev, null, 2);
-          navigator.clipboard.writeText(jsonString);
-        });
-        evDiv.appendChild(copyJsonBtn);
 
         resultsEl.appendChild(evDiv);
       });
