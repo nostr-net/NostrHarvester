@@ -16,7 +16,70 @@ exampleEls.forEach(el => {
   });
 });
 
+// Handle browser back/forward navigation
+window.addEventListener('popstate', () => {
+  loadFromURL();
+});
+
+// Load search from URL parameters on page load
+document.addEventListener('DOMContentLoaded', () => {
+  loadFromURL();
+});
+
+// Convert URL parameters to search query string
+function urlParamsToQuery(params) {
+  const tokens = [];
+  
+  for (const [key, value] of params.entries()) {
+    if (key.startsWith('not-')) {
+      const baseKey = key.slice(4);
+      if (['pubkey', 'relay', 'kind', 'since', 'until', 'limit', 'offset'].includes(baseKey)) {
+        tokens.push(`-${baseKey}:${value}`);
+      } else if (baseKey === 'tag') {
+        tokens.push(`-tag:${value}`);
+      } else if (baseKey === 'q') {
+        tokens.push(value.includes(' ') ? `-"${value}"` : `-${value}`);
+      }
+    } else if (['pubkey', 'relay', 'kind', 'since', 'until', 'limit', 'offset'].includes(key)) {
+      tokens.push(`${key}:${value}`);
+    } else if (key === 'tag') {
+      tokens.push(`tag:${value}`);
+    } else if (key === 'q') {
+      tokens.push(value.includes(' ') ? `"${value}"` : value);
+    } else if (key === 'not-q') {
+      tokens.push(value.includes(' ') ? `-"${value}"` : `-${value}`);
+    }
+  }
+  
+  return tokens.join(' ');
+}
+
+// Load search parameters from URL and execute search
+function loadFromURL() {
+  const urlParams = new URLSearchParams(window.location.search);
+  
+  if (urlParams.toString()) {
+    // Convert URL parameters back to search query
+    const query = urlParamsToQuery(urlParams);
+    inputEl.value = query;
+    
+    // Perform search without updating URL (to avoid infinite loop)
+    performSearchInternal(false);
+  }
+}
+
+// Update URL with current search parameters
+function updateURL(params) {
+  const url = new URL(window.location);
+  url.search = params.toString();
+  window.history.pushState({}, '', url);
+}
+
 async function performSearch() {
+  await performSearchInternal(true);
+}
+
+async function performSearchInternal(updateUrl = true) {
   const query = inputEl.value.trim();
   // Tokenize on whitespace, keeping quoted phrases together and handling negation
   const tokens = query
@@ -67,6 +130,12 @@ async function performSearch() {
   }
 
   const url = `${API_BASE}?${params.toString()}`;
+  
+  // Update URL with search parameters (only when not loading from URL)
+  if (updateUrl) {
+    updateURL(params);
+  }
+  
   resultsEl.innerHTML = '<p>Loading...</p>';
   try {
     const resp = await fetch(url);
