@@ -94,13 +94,13 @@ async def auth_middleware(request: Request, call_next):
         
         # Expect header in form 'Bearer <token>'
         if not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            raise HTTPException(status_code=401, detail="unauthorized - for api access contact aljaz")
         
         provided = auth_header[len("Bearer "):].strip()
         
         # Constant-time comparison to mitigate timing attacks
         if not hmac.compare_digest(provided, token):
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            raise HTTPException(status_code=401, detail="unauthorized - for api access contact aljaz")
         
         return await call_next(request)
     
@@ -247,7 +247,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={
-            "detail": "Internal server error", 
+            "detail": "service temporarily unavailable - for support contact aljaz", 
             "error": "server_error"
         }
     )
@@ -462,7 +462,7 @@ async def get_events(
         # Hide internal errors from clients
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="service temporarily unavailable - for support contact aljaz"
         )
     finally:
         if conn:
@@ -526,7 +526,7 @@ async def get_stats():
         # Hide internal errors from clients
         raise HTTPException(
             status_code=500,
-            detail="Internal server error"
+            detail="service temporarily unavailable - for support contact aljaz"
         )
     finally:
         if conn:
