@@ -7,7 +7,7 @@ from common.circuit_breaker import CircuitBreaker
 
 # Import shared Prometheus metrics
 from .metrics import EVENTS_RECEIVED, NOTIFICATION_ERRORS
-from nostr_sdk import Client, Filter, HandleNotification
+from nostr_sdk import Client, Filter, HandleNotification, RelayUrl
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,10 @@ class RelayManager:
 
         async def handle(self, relay_url, subscription_id, event):
             try:
-                EVENTS_RECEIVED.labels(relay_url).inc()
+                # Convert RelayUrl to string for compatibility
+                relay_url_str = str(relay_url)
+                
+                EVENTS_RECEIVED.labels(relay_url_str).inc()
                 # Convert Event object to JSON dict
                 event_json = event.as_json()
                 event_data = json.loads(event_json)
@@ -42,11 +45,11 @@ class RelayManager:
                 if response_sec > 86400:
                     logger.warning(
                         f"Unusually high response time ({response_sec}s) for event "
-                        f"{event_data.get('id')} from {relay_url}"
+                        f"{event_data.get('id')} from {relay_url_str}"
                     )
                 response_ms = min(response_sec * 1000, 2147483647)
 
-                await self._event_processor.process_event(event_data, relay_url, response_ms)
+                await self._event_processor.process_event(event_data, relay_url_str, response_ms)
             except Exception as e:
                 NOTIFICATION_ERRORS.inc()
                 logger.error(f"Error in notification handler: {e}")
@@ -84,7 +87,9 @@ class RelayManager:
                 logger.warning(f"Circuit open for {url}, skipping relay connection")
                 continue
             try:
-                await self._client.add_relay(url)
+                relay_url = RelayUrl.parse(url)
+                await self._client.add_relay(relay_url)
+                logger.info(f"Successfully added relay: {url}")
             except Exception as e:
                 logger.error(f"Error adding relay {url}: {e}")
                 cb.record_failure()
