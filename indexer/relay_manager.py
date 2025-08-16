@@ -28,6 +28,7 @@ class RelayManager:
                 relay_url_str = str(relay_url)
                 
                 EVENTS_RECEIVED.labels(relay_url_str).inc()
+                logger.info(f"Received event from {relay_url_str}: {event.id()}")
                 # Convert Event object to JSON dict
                 event_json = event.as_json()
                 event_data = json.loads(event_json)
@@ -95,12 +96,29 @@ class RelayManager:
                 cb.record_failure()
             else:
                 cb.record_success()
-        await self._client.connect()
+        try:
+            logger.info("Connecting to relays...")
+            await self._client.connect()
+            logger.info("Connected to relays successfully")
+        except Exception as e:
+            logger.error(f"Failed to connect to relays: {e}")
+            raise
 
-        await self._client.subscribe(Filter())
+        try:
+            logger.info("Subscribing to all events with empty filter...")
+            await self._client.subscribe(Filter())
+            logger.info("Subscription created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create subscription: {e}")
+            raise
 
         # Process incoming events until stopped
-        await self._client.handle_notifications(self._handler)
+        try:
+            logger.info("Starting to handle notifications...")
+            await self._client.handle_notifications(self._handler)
+        except Exception as e:
+            logger.error(f"Error handling notifications: {e}")
+            raise
 
     async def disconnect_all(self):
         """

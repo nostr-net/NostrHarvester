@@ -1,4 +1,9 @@
 {
-  "relays": 
-["wss://relay.nostr.net"]
+  "relays": [
+    "wss://relay.nostr.net",
+    "wss://wot.nostr.net",
+    "wss://relay.primal.net",
+    "wss://relay.nostr.band",
+    "wss://nos.lol"
+  ]
 }
